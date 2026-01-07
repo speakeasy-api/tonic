@@ -284,37 +284,37 @@ function scoreCandidate(
 
   // Type-level matching (highest priority)
   if (schema._kind === "string" && typeof value === "string") {
-    candidate.score += 1000;
+    candidate.score += 100;
     candidate.typeMatch = true;
   } else if (
     schema._kind === "number" &&
     typeof value === "number" &&
     !Number.isNaN(value)
   ) {
-    candidate.score += 1000;
+    candidate.score += 100;
     candidate.typeMatch = true;
   } else if (schema._kind === "boolean" && typeof value === "boolean") {
-    candidate.score += 1000;
+    candidate.score += 100;
     candidate.typeMatch = true;
   } else if (schema._kind === "literal") {
     const litSchema = schema as Schema & {
       _literal: string | number | boolean;
     };
     if (value === litSchema._literal) {
-      candidate.score += 2000; // Exact literal match is highest
+      candidate.score += 200; // Exact literal match is highest
       candidate.typeMatch = true;
     } else if (typeof value === typeof litSchema._literal) {
       // Same base type - still a good match
-      candidate.score += 1000;
+      candidate.score += 100;
       candidate.typeMatch = true;
     }
   } else if (schema._kind === "nullable") {
     if (value === null) {
-      candidate.score += 1500;
+      candidate.score += 150;
       candidate.typeMatch = true;
     }
   } else if (schema._kind === "array" && Array.isArray(value)) {
-    candidate.score += 800;
+    candidate.score += 80;
     candidate.typeMatch = true;
   } else if (schema._kind === "object" && isPlainObject(value)) {
     candidate.typeMatch = true;
@@ -337,13 +337,13 @@ function scoreCandidate(
         const expected = litSchema._literal;
         if (key in value) {
           if (value[key] === expected) {
-            candidate.score += 500; // Exact discriminator match
+            candidate.score += 50; // Exact discriminator match
           } else if (typeof value[key] === typeof expected) {
             // Same type but different value - small bonus (literal accepts any of same type)
-            candidate.score += 50;
+            candidate.score += 5;
           } else {
             // Different type - penalty
-            candidate.score -= 500;
+            candidate.score -= 50;
           }
         }
       }
@@ -354,24 +354,24 @@ function scoreCandidate(
       if ("_optional" in propSchema) continue;
 
       if (key in value) {
-        candidate.score += 50; // Required property present
+        candidate.score += 5; // Required property present
 
         // Bonus for type match
         const propValue = value[key];
         const innerKind = propSchema._kind;
         if (innerKind === "string" && typeof propValue === "string") {
-          candidate.score += 20;
+          candidate.score += 2;
         } else if (innerKind === "number" && typeof propValue === "number") {
-          candidate.score += 20;
+          candidate.score += 2;
         } else if (innerKind === "boolean" && typeof propValue === "boolean") {
-          candidate.score += 20;
+          candidate.score += 2;
         } else if (innerKind === "object" && isPlainObject(propValue)) {
-          candidate.score += 20;
+          candidate.score += 2;
         } else if (innerKind === "array" && Array.isArray(propValue)) {
-          candidate.score += 20;
+          candidate.score += 2;
         }
       } else {
-        candidate.score -= 100; // Missing required property
+        candidate.score -= 10; // Missing required property
       }
     }
 
@@ -385,7 +385,7 @@ function scoreCandidate(
         (s) => s !== schema && key in s._shape
       ).length;
       if (keyInOtherSchemas === 0) {
-        candidate.score += 100; // Unique property
+        candidate.score += 10; // Unique property
       }
     }
   }
@@ -394,15 +394,15 @@ function scoreCandidate(
   if (!candidate.typeMatch) {
     if (schema._kind === "string") {
       // Everything can become a string
-      candidate.score += 10;
+      candidate.score += 1;
     } else if (schema._kind === "number" && typeof value === "string") {
       const parsed = parseFloat(value);
       if (!Number.isNaN(parsed)) {
-        candidate.score += 50; // Valid number coercion
+        candidate.score += 5; // Valid number coercion
       }
     } else if (schema._kind === "boolean") {
       if (value === "true" || value === "false" || value === 0 || value === 1) {
-        candidate.score += 50;
+        candidate.score += 5;
       }
     }
   }
