@@ -2,6 +2,16 @@
 // TYPES
 // ============================================================================
 
+/** Forces TypeScript to expand intersections into readable flat types */
+type Prettify<T> = T extends infer U ? { [K in keyof U]: U[K] } & {} : never;
+
+/** Recursively prettify nested object types */
+type DeepPrettify<T> = T extends (infer U)[]
+  ? DeepPrettify<U>[]
+  : T extends object
+  ? Prettify<{ [K in keyof T]: DeepPrettify<T[K]> }>
+  : T;
+
 export type Schema<T = unknown> = {
   (value: unknown): T;
   _output: T;
@@ -9,7 +19,7 @@ export type Schema<T = unknown> = {
   _default: T;
 };
 
-export type Infer<T extends Schema> = T["_output"];
+export type Infer<T extends Schema> = DeepPrettify<T["_output"]>;
 
 // ============================================================================
 // HELPERS
@@ -77,75 +87,79 @@ export function boolean(): Schema<boolean> {
 type LiteralOutput<T extends string | number | boolean> = T extends string
   ? T | string
   : T extends number
-    ? T | number
-    : T | boolean;
+  ? T | number
+  : T | boolean;
 
 export function literal<T extends string | number | boolean>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
   const defaultVal = expected as LiteralOutput<T>;
-  const schema = createSchema("literal", defaultVal, (value): LiteralOutput<T> => {
-    // Nullish -> use literal as default
-    if (value === undefined || value === null) {
-      return expected as LiteralOutput<T>;
-    }
-
-    // Exact match
-    if (value === expected) {
-      return expected as LiteralOutput<T>;
-    }
-
-    // Coerce to same base type
-    if (typeof expected === "string") {
-      // Accept any string, or coerce to string
-      if (typeof value === "string") {
-        return value as LiteralOutput<T>;
+  const schema = createSchema(
+    "literal",
+    defaultVal,
+    (value): LiteralOutput<T> => {
+      // Nullish -> use literal as default
+      if (value === undefined || value === null) {
+        return expected as LiteralOutput<T>;
       }
-      if (typeof value === "number" || typeof value === "boolean") {
-        return String(value) as LiteralOutput<T>;
-      }
-      return expected as LiteralOutput<T>;
-    }
 
-    if (typeof expected === "number") {
-      // Accept any number, or coerce to number
-      if (typeof value === "number" && !Number.isNaN(value)) {
-        return value as LiteralOutput<T>;
+      // Exact match
+      if (value === expected) {
+        return expected as LiteralOutput<T>;
       }
-      if (typeof value === "string") {
-        const parsed = parseFloat(value);
-        if (!Number.isNaN(parsed)) {
-          return parsed as LiteralOutput<T>;
+
+      // Coerce to same base type
+      if (typeof expected === "string") {
+        // Accept any string, or coerce to string
+        if (typeof value === "string") {
+          return value as LiteralOutput<T>;
         }
+        if (typeof value === "number" || typeof value === "boolean") {
+          return String(value) as LiteralOutput<T>;
+        }
+        return expected as LiteralOutput<T>;
       }
-      if (typeof value === "boolean") {
-        return (value ? 1 : 0) as LiteralOutput<T>;
+
+      if (typeof expected === "number") {
+        // Accept any number, or coerce to number
+        if (typeof value === "number" && !Number.isNaN(value)) {
+          return value as LiteralOutput<T>;
+        }
+        if (typeof value === "string") {
+          const parsed = parseFloat(value);
+          if (!Number.isNaN(parsed)) {
+            return parsed as LiteralOutput<T>;
+          }
+        }
+        if (typeof value === "boolean") {
+          return (value ? 1 : 0) as LiteralOutput<T>;
+        }
+        return expected as LiteralOutput<T>;
       }
+
+      if (typeof expected === "boolean") {
+        // Accept any boolean, or coerce to boolean
+        if (typeof value === "boolean") {
+          return value as LiteralOutput<T>;
+        }
+        if (value === "true" || value === 1) {
+          return true as LiteralOutput<T>;
+        }
+        if (value === "false" || value === 0) {
+          return false as LiteralOutput<T>;
+        }
+        if (typeof value === "string") {
+          return (value.length > 0) as LiteralOutput<T>;
+        }
+        if (typeof value === "number") {
+          return (value !== 0) as LiteralOutput<T>;
+        }
+        return expected as LiteralOutput<T>;
+      }
+
       return expected as LiteralOutput<T>;
     }
-
-    if (typeof expected === "boolean") {
-      // Accept any boolean, or coerce to boolean
-      if (typeof value === "boolean") {
-        return value as LiteralOutput<T>;
-      }
-      if (value === "true" || value === 1) {
-        return true as LiteralOutput<T>;
-      }
-      if (value === "false" || value === 0) {
-        return false as LiteralOutput<T>;
-      }
-      if (typeof value === "string") {
-        return (value.length > 0) as LiteralOutput<T>;
-      }
-      if (typeof value === "number") {
-        return (value !== 0) as LiteralOutput<T>;
-      }
-      return expected as LiteralOutput<T>;
-    }
-
-    return expected as LiteralOutput<T>;
-  }) as Schema<LiteralOutput<T>> & { _literal: T };
+  ) as Schema<LiteralOutput<T>> & { _literal: T };
 
   schema._literal = expected;
   return schema;
@@ -207,19 +221,17 @@ export function object<T extends ObjectShape>(
 }
 
 export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
-  return createSchema("array", [], (value) => {
+  return createSchema("array", [] as Infer<T>[], (value): Infer<T>[] => {
     if (!Array.isArray(value)) {
       if (value === undefined || value === null) return [];
       // Wrap single value in array
-      return [element(value)];
+      return [element(value) as Infer<T>];
     }
-    return value.map((v) => element(v));
+    return value.map((v) => element(v) as Infer<T>);
   });
 }
 
-export function optional<T extends Schema>(
-  inner: T
-): OptionalSchema<Infer<T>> {
+export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
   const schema = createSchema("optional", undefined, (value) => {
     if (value === undefined) return undefined;
     return inner(value);
@@ -230,9 +242,7 @@ export function optional<T extends Schema>(
   return schema;
 }
 
-export function nullable<T extends Schema>(
-  inner: T
-): NullableSchema<Infer<T>> {
+export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
   const schema = createSchema("nullable", null, (value) => {
     if (value === null || value === undefined) return null;
     return inner(value);
@@ -276,14 +286,20 @@ function scoreCandidate(
   if (schema._kind === "string" && typeof value === "string") {
     candidate.score += 1000;
     candidate.typeMatch = true;
-  } else if (schema._kind === "number" && typeof value === "number" && !Number.isNaN(value)) {
+  } else if (
+    schema._kind === "number" &&
+    typeof value === "number" &&
+    !Number.isNaN(value)
+  ) {
     candidate.score += 1000;
     candidate.typeMatch = true;
   } else if (schema._kind === "boolean" && typeof value === "boolean") {
     candidate.score += 1000;
     candidate.typeMatch = true;
   } else if (schema._kind === "literal") {
-    const litSchema = schema as Schema & { _literal: string | number | boolean };
+    const litSchema = schema as Schema & {
+      _literal: string | number | boolean;
+    };
     if (value === litSchema._literal) {
       candidate.score += 2000; // Exact literal match is highest
       candidate.typeMatch = true;
@@ -302,7 +318,10 @@ function scoreCandidate(
     candidate.typeMatch = true;
   } else if (schema._kind === "object" && isPlainObject(value)) {
     candidate.typeMatch = true;
-    const objSchema = schema as Schema & { _shape: ObjectShape; _name?: string };
+    const objSchema = schema as Schema & {
+      _shape: ObjectShape;
+      _name?: string;
+    };
     candidate.name = objSchema._name;
 
     // Score based on property matching
@@ -312,7 +331,9 @@ function scoreCandidate(
     // Check for literal/discriminator matches (very high priority)
     for (const [key, propSchema] of Object.entries(shape)) {
       if (propSchema._kind === "literal") {
-        const litSchema = propSchema as Schema & { _literal: string | number | boolean };
+        const litSchema = propSchema as Schema & {
+          _literal: string | number | boolean;
+        };
         const expected = litSchema._literal;
         if (key in value) {
           if (value[key] === expected) {
@@ -355,10 +376,14 @@ function scoreCandidate(
     }
 
     // Unique property bonus
-    const allObjectSchemas = allSchemas.filter(s => s._kind === "object") as (Schema & { _shape: ObjectShape })[];
+    const allObjectSchemas = allSchemas.filter(
+      (s) => s._kind === "object"
+    ) as (Schema & { _shape: ObjectShape })[];
     for (const key of inputKeys) {
       if (!(key in shape)) continue;
-      const keyInOtherSchemas = allObjectSchemas.filter(s => s !== schema && key in s._shape).length;
+      const keyInOtherSchemas = allObjectSchemas.filter(
+        (s) => s !== schema && key in s._shape
+      ).length;
       if (keyInOtherSchemas === 0) {
         candidate.score += 100; // Unique property
       }
@@ -392,7 +417,9 @@ export function oneOf<T extends Schema[]>(
 
   const schema = createSchema("oneOf", defaultVal, (value) => {
     // Score all candidates
-    const candidates = schemas.map((s, i) => scoreCandidate(s, value, i, schemas));
+    const candidates = schemas.map((s, i) =>
+      scoreCandidate(s, value, i, schemas)
+    );
 
     // Sort by score descending
     candidates.sort((a, b) => b.score - a.score);
@@ -423,7 +450,7 @@ export function union<T extends Schema[]>(
 // ============================================================================
 
 export function parse<T extends Schema>(schema: T, value: unknown): Infer<T> {
-  return schema(value);
+  return schema(value) as Infer<T>;
 }
 
 export function parseWithMeta<T extends Schema>(
@@ -452,7 +479,7 @@ export function parseWithMeta<T extends Schema>(
   }
 
   return {
-    value: schema(value),
+    value: schema(value) as Infer<T>,
     meta: {
       chosenIndex: 0,
       candidates: [],
