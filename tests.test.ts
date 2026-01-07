@@ -9,7 +9,6 @@ import {
   optional,
   nullable,
   literal,
-  oneOf,
   union,
   parse,
   parseWithMeta,
@@ -400,42 +399,42 @@ describe("nullable schema", () => {
 
 describe("oneOf - primitive handling", () => {
   test("selects string branch for string input", () => {
-    const schema = oneOf([string(), number()]);
+    const schema = union(string(), number());
     expect(parse(schema, "hello")).toBe("hello");
   });
 
   test("selects number branch for number input", () => {
-    const schema = oneOf([string(), number()]);
+    const schema = union(string(), number());
     expect(parse(schema, 42)).toBe(42);
   });
 
   test("selects boolean branch for boolean input", () => {
-    const schema = oneOf([string(), boolean()]);
+    const schema = union(string(), boolean());
     expect(parse(schema, true)).toBe(true);
   });
 
   test("selects literal branch for matching value", () => {
-    const schema = oneOf([literal("active"), literal("inactive")]);
+    const schema = union(literal("active"), literal("inactive"));
     expect(parse(schema, "active")).toBe("active");
   });
 
   test("handles null with nullable", () => {
-    const schema = oneOf([nullable(string()), number()]);
+    const schema = union(nullable(string()), number());
     expect(parse(schema, null)).toBeNull();
   });
 
   test("primitives first - string over object", () => {
-    const schema = oneOf([string(), object({ value: string() })]);
+    const schema = union(string(), object({ value: string() }));
     expect(parse(schema, "hello")).toBe("hello");
   });
 
   test("primitives first - number over object", () => {
-    const schema = oneOf([number(), object({ value: number() })]);
+    const schema = union(number(), object({ value: number() }));
     expect(parse(schema, 42)).toBe(42);
   });
 
   test("coerces when best match requires it", () => {
-    const schema = oneOf([string(), number()]);
+    const schema = union(string(), number());
     // boolean -> should coerce to string (first viable)
     expect(parse(schema, true)).toBe("true");
   });
@@ -450,7 +449,7 @@ describe("oneOf - object scoring", () => {
     const Card = object({ kind: literal("card"), number: string() }, "Card");
     const Bank = object({ kind: literal("bank"), iban: string() }, "Bank");
 
-    const schema = oneOf([Card, Bank]);
+    const schema = union(Card, Bank);
 
     const result = parseWithMeta(schema, { kind: "card", number: "4242" });
     expect(result.value).toEqual({ kind: "card", number: "4242" });
@@ -461,7 +460,7 @@ describe("oneOf - object scoring", () => {
     const TypeA = object({ common: string(), uniqueA: string() });
     const TypeB = object({ common: string(), uniqueB: string() });
 
-    const schema = oneOf([TypeA, TypeB]);
+    const schema = union(TypeA, TypeB);
 
     const result1 = parseWithMeta(schema, { common: "x", uniqueA: "y" });
     expect(result1.meta.chosenIndex).toBe(0);
@@ -474,7 +473,7 @@ describe("oneOf - object scoring", () => {
     const A = object({ kind: literal("a"), value: string() });
     const B = object({ kind: literal("b"), value: string() });
 
-    const schema = oneOf([A, B]);
+    const schema = union(A, B);
     // Neither discriminator matches exactly, but "c" is still a valid string
     const result = parse(schema, { kind: "c", value: "test" });
     expect(result.kind).toBe("c"); // literal accepts any string
@@ -483,7 +482,7 @@ describe("oneOf - object scoring", () => {
 
   test("defaults literal for nullish", () => {
     const A = object({ kind: literal("a"), value: string() });
-    const schema = oneOf([A]);
+    const schema = union(A);
     const result = parse(schema, { value: "test" });
     expect(result.kind).toBe("a"); // defaults to literal when missing
     expect(result.value).toBe("test");
@@ -493,7 +492,7 @@ describe("oneOf - object scoring", () => {
     const StringObj = object({ value: string() }, "StringObj");
     const NumberObj = object({ value: number() }, "NumberObj");
 
-    const schema = oneOf([StringObj, NumberObj]);
+    const schema = union(StringObj, NumberObj);
 
     // String value should prefer StringObj
     const result1 = parseWithMeta(schema, { value: "hello" });
@@ -516,7 +515,7 @@ describe("oneOf - real world scenarios", () => {
       "SomeObject"
     );
 
-    const Value = oneOf([string(), number(), SomeObject]);
+    const Value = union(string(), number(), SomeObject);
 
     type Value = Infer<typeof Value>;
 
@@ -543,7 +542,7 @@ describe("oneOf - real world scenarios", () => {
       iban: string(),
     });
 
-    const PaymentMethod = oneOf([Card, Bank]);
+    const PaymentMethod = union(Card, Bank);
 
     const pm = parse(PaymentMethod, {
       kind: "card",
@@ -572,7 +571,7 @@ describe("oneOf - real world scenarios", () => {
     const A = object({ type: literal("a"), a: string() }, "A");
     const B = object({ type: literal("b"), b: string() }, "B");
 
-    const U = oneOf([A, B]);
+    const U = union(A, B);
 
     const out = parseWithMeta(U, { type: "a", a: "x", extra: 1 });
 
@@ -657,7 +656,7 @@ describe("type inference", () => {
   });
 
   test("infers oneOf type", () => {
-    const schema = oneOf([string(), number()]);
+    const schema = union(string(), number());
     type T = Infer<typeof schema>;
     const str: T = "hello";
     const num: T = 42;
@@ -714,12 +713,12 @@ describe("edge cases", () => {
   });
 
   test("handles oneOf with single schema", () => {
-    const schema = oneOf([string()]);
+    const schema = union(string());
     expect(parse(schema, "hello")).toBe("hello");
   });
 
   test("handles nested oneOf", () => {
-    const Inner = oneOf([string(), number()]);
+    const Inner = union(string(), number());
     const Outer = object({ value: Inner });
 
     expect(parse(Outer, { value: "hello" })).toEqual({ value: "hello" });
@@ -741,7 +740,7 @@ describe("edge cases", () => {
   });
 
   test("never throws - always returns valid value", () => {
-    const schema = oneOf([string(), number()]);
+    const schema = union(string(), number());
     // All these should work without throwing
     expect(() => parse(schema, undefined)).not.toThrow();
     expect(() => parse(schema, null)).not.toThrow();
@@ -764,8 +763,8 @@ describe("edge cases", () => {
 describe("open enum behavior", () => {
   test("string literal union preserves unknown value", () => {
     // Open enum: Union[Literal["red", "green", "blue"], UnrecognizedStr]
-    // In tonic: oneOf([literal("red"), literal("green"), literal("blue")])
-    const schema = oneOf([literal("red"), literal("green"), literal("blue")]);
+    // In tonic: union(literal("red"), literal("green"), literal("blue"))
+    const schema = union(literal("red"), literal("green"), literal("blue"));
 
     // Known values work
     expect(parse(schema, "red")).toBe("red");
@@ -779,7 +778,7 @@ describe("open enum behavior", () => {
 
   test("integer literal union preserves unknown value", () => {
     // Open enum: HeroWidth with values [480, 720, 1080]
-    const schema = oneOf([literal(480), literal(720), literal(1080)]);
+    const schema = union(literal(480), literal(720), literal(1080));
 
     // Known values work
     expect(parse(schema, 480)).toBe(480);
@@ -793,13 +792,9 @@ describe("open enum behavior", () => {
 
   test("object with multiple open enum fields accepts mix of known and unknown", () => {
     // Theme model with multiple open enum fields
-    const Color = oneOf([literal("red"), literal("green"), literal("blue")]);
-    const Icon = oneOf([
-      literal("tick"),
-      literal("thumbs-up"),
-      literal("fire"),
-    ]);
-    const HeroWidth = oneOf([literal(480), literal(720), literal(1080)]);
+    const Color = union(literal("red"), literal("green"), literal("blue"));
+    const Icon = union(literal("tick"), literal("thumbs-up"), literal("fire"));
+    const HeroWidth = union(literal(480), literal(720), literal(1080));
 
     const Theme = object({
       color: Color,
@@ -829,7 +824,7 @@ describe("open enum behavior", () => {
       "Dog"
     );
 
-    const schema = oneOf([Cat, Dog]);
+    const schema = union(Cat, Dog);
 
     // Exact match on discriminator
     const catResult = parseWithMeta(schema, { kind: "cat" });
@@ -846,7 +841,7 @@ describe("open enum behavior", () => {
     const Cat = object({ kind: literal("cat") }, "Cat");
     const Dog = object({ kind: literal("dog") }, "Dog");
 
-    const schema = oneOf([Cat, Dog]);
+    const schema = union(Cat, Dog);
 
     // Unknown discriminator value - both accept, first wins due to tie-break
     const result = parseWithMeta(schema, { kind: "bat" });
@@ -859,7 +854,7 @@ describe("open enum behavior", () => {
     const Cat = object({ kind: literal("cat"), name: string() }, "Cat");
     const Dog = object({ kind: literal("dog") }, "Dog");
 
-    const schema = oneOf([Cat, Dog]);
+    const schema = union(Cat, Dog);
 
     // Unknown kind "bat" + has name field → Cat should win (more field coverage)
     const result = parseWithMeta(schema, { kind: "bat", name: "Bruce" });
@@ -878,7 +873,7 @@ describe("open enum behavior", () => {
     type _TypeA = Infer<typeof A>;
     type _TypeB = Infer<typeof B>;
 
-    const schema = oneOf([A, B]);
+    const schema = union(A, B);
 
     // Payload has "bar" field, should match B
     const resultB = parseWithMeta(schema, { inner: { bar: "bar" } });
@@ -895,7 +890,7 @@ describe("open enum behavior", () => {
     // Inner union variants
     const CatInner = object({ kind: literal("cat") }, "CatInner");
     const DogInner = object({ kind: literal("dog") }, "DogInner");
-    const InnerUnion = oneOf([CatInner, DogInner]);
+    const InnerUnion = union(CatInner, DogInner);
 
     // Option with both kind and name fields
     const KindAndName = object({
@@ -906,7 +901,7 @@ describe("open enum behavior", () => {
     const OptionA = object({ data: InnerUnion }, "OptionA");
     const OptionB = object({ data: KindAndName }, "OptionB");
 
-    const schema = oneOf([OptionA, OptionB]);
+    const schema = union(OptionA, OptionB);
 
     // Payload with unknown values + name field → OptionB should win (better field coverage)
     const result = parseWithMeta(schema, {
@@ -918,7 +913,7 @@ describe("open enum behavior", () => {
   });
 
   test("open enum round-trip - unknown values survive serialization", () => {
-    const Color = oneOf([literal("red"), literal("green"), literal("blue")]);
+    const Color = union(literal("red"), literal("green"), literal("blue"));
     const Theme = object({ color: Color, icon: string() });
 
     // Parse with unknown enum value
@@ -945,7 +940,7 @@ describe("open enum behavior", () => {
       "Extended"
     );
 
-    const schema = oneOf([Minimal, Extended]);
+    const schema = union(Minimal, Extended);
 
     // Payload only has "foo", Minimal wins (fewer missing required fields)
     const result1 = parseWithMeta(schema, { foo: "test" });
@@ -968,7 +963,7 @@ describe("stress scenarios", () => {
       "B"
     );
 
-    const schema = oneOf([A, B]);
+    const schema = union(A, B);
 
     // Has B's unique prop but kind says "a" -> should pick A if discriminator scoring dominates.
     const out = parseWithMeta(schema, {
@@ -988,7 +983,7 @@ describe("stress scenarios", () => {
   test("oneOf: deterministic tie-break when shapes are identical (index-stable)", () => {
     const S1 = object({ value: string() }, "S1");
     const S2 = object({ value: string() }, "S2");
-    const schema = oneOf([S1, S2]);
+    const schema = union(S1, S2);
 
     const out = parseWithMeta(schema, { value: "x" });
 
@@ -1001,7 +996,7 @@ describe("stress scenarios", () => {
   test("oneOf: prefers native type match over match-via-coercion (string input)", () => {
     const StringObj = object({ value: string() }, "StringObj");
     const NumberObj = object({ value: number() }, "NumberObj");
-    const schema = oneOf([StringObj, NumberObj]);
+    const schema = union(StringObj, NumberObj);
 
     // "42" can become number 42, but it is natively a string; prefer StringObj if scoring uses raw type match.
     const out = parseWithMeta(schema, { value: "42" });
@@ -1027,7 +1022,7 @@ describe("stress scenarios", () => {
     );
 
     const DeepB = object({ x: string() }, "DeepB");
-    const schema = oneOf([DeepA, DeepB]);
+    const schema = union(DeepA, DeepB);
 
     const out = parseWithMeta(schema, {});
 
@@ -1039,7 +1034,7 @@ describe("stress scenarios", () => {
   });
 
   test("array(oneOf): mixed junk values become valid typed outputs without throwing", () => {
-    const Item = oneOf([
+    const Item = union(
       object(
         { kind: literal("obj"), id: number(), tag: optional(string()) },
         "Obj"
@@ -1047,8 +1042,8 @@ describe("stress scenarios", () => {
       string(),
       number(),
       boolean(),
-      array(number()),
-    ]);
+      array(number())
+    );
 
     const schema = array(Item);
 
@@ -1088,7 +1083,7 @@ describe("stress scenarios", () => {
       "AsObject"
     );
 
-    const schema = oneOf([AsArray, AsObject]);
+    const schema = union(AsArray, AsObject);
 
     const out1 = parseWithMeta(schema, ["1", 2, "3"]);
     expect(out1.meta.chosenIndex).toBe(0);
@@ -1120,10 +1115,10 @@ describe("stress scenarios", () => {
       "Coordinates"
     );
 
-    const Location = oneOf([Address, Coordinates]);
+    const Location = union(Address, Coordinates);
 
     const User = object({
-      id: oneOf([number(), string()]),
+      id: union(number(), string()),
       location: Location,
       flags: optional(array(boolean())),
       meta: optional(object({ source: optional(string()) })),
@@ -1282,7 +1277,7 @@ describe("stress scenarios", () => {
       "E"
     );
 
-    const schema = oneOf([A, B, C, D, E, string(), number(), boolean()]);
+    const schema = union(A, B, C, D, E, string(), number(), boolean());
 
     const input = {
       kind: "d",
@@ -1307,10 +1302,10 @@ describe("stress scenarios", () => {
       s: string(),
       n: number(),
       b: boolean(),
-      u: oneOf([string(), number(), object({ x: string() })]),
-      arr: array(oneOf([number(), object({ y: number() })])),
+      u: union(string(), number(), object({ x: string() })),
+      arr: array(union(number(), object({ y: number() }))),
       nested: object({
-        maybe: optional(oneOf([nullable(string()), number()])),
+        maybe: optional(union(nullable(string()), number())),
       }),
     });
 
@@ -1333,5 +1328,170 @@ describe("stress scenarios", () => {
     expect(Array.isArray(out.arr)).toBe(true);
     // optional maybe omitted
     expect("maybe" in out.nested).toBe(false);
+  });
+});
+
+// ============================================================================
+// SECURITY & ROBUSTNESS
+// ============================================================================
+
+describe("security issues", () => {
+  test("object schema should not be vulnerable to prototype pollution via __proto__", () => {
+    const schema = object({ name: string() });
+
+    // Malicious input with __proto__ key
+    const maliciousInput = JSON.parse(
+      '{"name": "test", "__proto__": {"polluted": true}}'
+    );
+
+    const result = parse(schema, maliciousInput);
+
+    // The result should NOT have __proto__ copied as an own property
+    // that could pollute the prototype chain
+    expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(
+      false
+    );
+
+    // Verify a fresh object is not polluted
+    const freshObj: Record<string, unknown> = {};
+    expect(freshObj.polluted).toBeUndefined();
+  });
+
+  test("object schema should not copy constructor key", () => {
+    const schema = object({ name: string() });
+
+    const maliciousInput = {
+      name: "test",
+      constructor: { prototype: { bad: true } },
+    };
+    const result = parse(schema, maliciousInput);
+
+    // constructor should not be an own property on the result
+    expect(Object.prototype.hasOwnProperty.call(result, "constructor")).toBe(
+      false
+    );
+  });
+
+  test("object schema should not copy prototype key", () => {
+    const schema = object({ name: string() });
+
+    const maliciousInput = { name: "test", prototype: { evil: true } };
+    const result = parse(schema, maliciousInput);
+
+    // prototype should not be an own property on the result
+    expect(Object.prototype.hasOwnProperty.call(result, "prototype")).toBe(
+      false
+    );
+  });
+});
+
+describe("robustness issues", () => {
+  test("union with no arguments should not crash", () => {
+    const schema = (union as any)();
+    expect(() => parse(schema, "anything")).not.toThrow();
+  });
+
+  test("union with no arguments should return undefined", () => {
+    const schema = (union as any)();
+    const result = parse(schema, "anything");
+    expect(result).toBeUndefined();
+  });
+
+  test("parseWithMeta with empty union should not crash", () => {
+    const schema = (union as any)();
+    expect(() => parseWithMeta(schema, "anything")).not.toThrow();
+  });
+
+  test("deeply nested object scoring should not cause stack overflow", () => {
+    // Create a deeply nested object (50 levels deep)
+    const createDeepSchema = (depth: number): ReturnType<typeof object> => {
+      if (depth === 0) {
+        return object({ value: string() });
+      }
+      return object({ nested: createDeepSchema(depth - 1) });
+    };
+
+    const createDeepValue = (depth: number): Record<string, unknown> => {
+      if (depth === 0) {
+        return { value: "leaf" };
+      }
+      return { nested: createDeepValue(depth - 1) };
+    };
+
+    const DeepA = createDeepSchema(50);
+    const DeepB = createDeepSchema(50);
+    const schema = union(DeepA, DeepB);
+
+    expect(() => parse(schema, createDeepValue(50))).not.toThrow();
+  });
+
+  test("early exit should not cause false positive when score accumulates past threshold", () => {
+    const LotsOfFields = object(
+      {
+        a: string(),
+        b: string(),
+        c: string(),
+        d: string(),
+        e: string(),
+        f: string(),
+        g: string(),
+        h: string(),
+        i: string(),
+        j: string(),
+        k: string(),
+        l: string(),
+        m: string(),
+        n: string(),
+        o: string(),
+        p: string(),
+        q: string(),
+        r: string(),
+        s: string(),
+        t: string(),
+        nested1: object({ x: string(), y: string(), z: string() }),
+        nested2: object({ x: string(), y: string(), z: string() }),
+      },
+      "LotsOfFields"
+    );
+
+    const ExactMatch = object(
+      {
+        kind: literal("exact"),
+        value: string(),
+      },
+      "ExactMatch"
+    );
+
+    const schema = union(LotsOfFields, ExactMatch);
+
+    const input = {
+      kind: "exact",
+      value: "test",
+      a: "1",
+      b: "2",
+      c: "3",
+      d: "4",
+      e: "5",
+      f: "6",
+      g: "7",
+      h: "8",
+      i: "9",
+      j: "10",
+      k: "11",
+      l: "12",
+      m: "13",
+      n: "14",
+      o: "15",
+      p: "16",
+      q: "17",
+      r: "18",
+      s: "19",
+      t: "20",
+      nested1: { x: "a", y: "b", z: "c" },
+      nested2: { x: "d", y: "e", z: "f" },
+    };
+
+    const result = parseWithMeta(schema, input);
+    expect(result.meta.chosenName).toBe("ExactMatch");
   });
 });
