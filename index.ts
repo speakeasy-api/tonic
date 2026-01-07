@@ -85,10 +85,10 @@ export function boolean(): Schema<boolean> {
 }
 
 type LiteralOutput<T extends string | number | boolean> = T extends string
-  ? T | string
+  ? T | (string & {})
   : T extends number
-  ? T | number
-  : T | boolean;
+  ? T | (number & {})
+  : T | (boolean & {});
 
 export function literal<T extends string | number | boolean>(
   expected: T
@@ -270,6 +270,73 @@ interface CandidateScore {
   typeMatch: boolean;
 }
 
+function scoreNestedObject(
+  schema: Schema & { _shape: ObjectShape },
+  value: Record<string, unknown>
+): number {
+  let score = 0;
+  const shape = schema._shape;
+  const inputKeys = new Set(Object.keys(value));
+
+  // Check for literal/discriminator matches
+  for (const [key, propSchema] of Object.entries(shape)) {
+    if (propSchema._kind === "literal") {
+      const litSchema = propSchema as Schema & {
+        _literal: string | number | boolean;
+      };
+      const expected = litSchema._literal;
+      if (key in value) {
+        if (value[key] === expected) {
+          score += 50; // Exact discriminator match
+        } else if (typeof value[key] === typeof expected) {
+          score += 5; // Same type but different value
+        } else {
+          score -= 50; // Different type - penalty
+        }
+      }
+    }
+  }
+
+  // Score required properties present with correct types
+  for (const [key, propSchema] of Object.entries(shape)) {
+    if ("_optional" in propSchema) continue;
+
+    if (key in value) {
+      score += 5; // Required property present
+
+      const propValue = value[key];
+      const innerKind = propSchema._kind;
+      if (innerKind === "string" && typeof propValue === "string") {
+        score += 2;
+      } else if (innerKind === "number" && typeof propValue === "number") {
+        score += 2;
+      } else if (innerKind === "boolean" && typeof propValue === "boolean") {
+        score += 2;
+      } else if (innerKind === "object" && isPlainObject(propValue)) {
+        score += 2;
+        // Recursively score nested objects
+        const nestedObjSchema = propSchema as Schema & { _shape: ObjectShape };
+        if (nestedObjSchema._shape) {
+          score += scoreNestedObject(nestedObjSchema, propValue);
+        }
+      } else if (innerKind === "array" && Array.isArray(propValue)) {
+        score += 2;
+      }
+    } else {
+      score -= 10; // Missing required property
+    }
+  }
+
+  // Bonus for input keys that exist in shape (field coverage)
+  for (const key of inputKeys) {
+    if (key in shape) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
 function scoreCandidate(
   schema: Schema,
   value: unknown,
@@ -324,58 +391,12 @@ function scoreCandidate(
     };
     candidate.name = objSchema._name;
 
-    // Score based on property matching
+    // Use recursive nested object scoring
+    candidate.score += scoreNestedObject(objSchema, value);
+
+    // Unique property bonus (top-level only for performance)
     const shape = objSchema._shape;
     const inputKeys = new Set(Object.keys(value));
-
-    // Check for literal/discriminator matches (very high priority)
-    for (const [key, propSchema] of Object.entries(shape)) {
-      if (propSchema._kind === "literal") {
-        const litSchema = propSchema as Schema & {
-          _literal: string | number | boolean;
-        };
-        const expected = litSchema._literal;
-        if (key in value) {
-          if (value[key] === expected) {
-            candidate.score += 50; // Exact discriminator match
-          } else if (typeof value[key] === typeof expected) {
-            // Same type but different value - small bonus (literal accepts any of same type)
-            candidate.score += 5;
-          } else {
-            // Different type - penalty
-            candidate.score -= 50;
-          }
-        }
-      }
-    }
-
-    // Score required properties present with correct types
-    for (const [key, propSchema] of Object.entries(shape)) {
-      if ("_optional" in propSchema) continue;
-
-      if (key in value) {
-        candidate.score += 5; // Required property present
-
-        // Bonus for type match
-        const propValue = value[key];
-        const innerKind = propSchema._kind;
-        if (innerKind === "string" && typeof propValue === "string") {
-          candidate.score += 2;
-        } else if (innerKind === "number" && typeof propValue === "number") {
-          candidate.score += 2;
-        } else if (innerKind === "boolean" && typeof propValue === "boolean") {
-          candidate.score += 2;
-        } else if (innerKind === "object" && isPlainObject(propValue)) {
-          candidate.score += 2;
-        } else if (innerKind === "array" && Array.isArray(propValue)) {
-          candidate.score += 2;
-        }
-      } else {
-        candidate.score -= 10; // Missing required property
-      }
-    }
-
-    // Unique property bonus
     const allObjectSchemas = allSchemas.filter(
       (s) => s._kind === "object"
     ) as (Schema & { _shape: ObjectShape })[];

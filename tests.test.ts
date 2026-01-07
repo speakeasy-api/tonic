@@ -757,6 +757,206 @@ describe("edge cases", () => {
   });
 });
 
+// ============================================================================
+// OPEN ENUM SCENARIOS
+// ============================================================================
+
+describe("open enum behavior", () => {
+  test("string literal union preserves unknown value", () => {
+    // Open enum: Union[Literal["red", "green", "blue"], UnrecognizedStr]
+    // In tonic: oneOf([literal("red"), literal("green"), literal("blue")])
+    const schema = oneOf([literal("red"), literal("green"), literal("blue")]);
+
+    // Known values work
+    expect(parse(schema, "red")).toBe("red");
+    expect(parse(schema, "green")).toBe("green");
+    expect(parse(schema, "blue")).toBe("blue");
+
+    // Unknown value is preserved, not coerced to a known value
+    expect(parse(schema, "purple")).toBe("purple");
+    expect(parse(schema, "orange")).toBe("orange");
+  });
+
+  test("integer literal union preserves unknown value", () => {
+    // Open enum: HeroWidth with values [480, 720, 1080]
+    const schema = oneOf([literal(480), literal(720), literal(1080)]);
+
+    // Known values work
+    expect(parse(schema, 480)).toBe(480);
+    expect(parse(schema, 720)).toBe(720);
+    expect(parse(schema, 1080)).toBe(1080);
+
+    // Unknown value is preserved
+    expect(parse(schema, 2160)).toBe(2160);
+    expect(parse(schema, 360)).toBe(360);
+  });
+
+  test("object with multiple open enum fields accepts mix of known and unknown", () => {
+    // Theme model with multiple open enum fields
+    const Color = oneOf([literal("red"), literal("green"), literal("blue")]);
+    const Icon = oneOf([
+      literal("tick"),
+      literal("thumbs-up"),
+      literal("fire"),
+    ]);
+    const HeroWidth = oneOf([literal(480), literal(720), literal(1080)]);
+
+    const Theme = object({
+      color: Color,
+      icon: Icon,
+      heroWidth: HeroWidth,
+    });
+
+    const result = parse(Theme, {
+      color: "purple", // unknown
+      icon: "tick", // known
+      heroWidth: 2160, // unknown
+    });
+
+    expect(result.color).toBe("purple");
+    expect(result.icon).toBe("tick");
+    expect(result.heroWidth).toBe(2160);
+  });
+
+  test("union discrimination with open enum discriminators - exact match wins", () => {
+    // Cat { kind: OpenEnum["cat"] } | Dog { kind: OpenEnum["dog"] }
+    const Cat = object(
+      { kind: literal("cat"), meow: optional(string()) },
+      "Cat"
+    );
+    const Dog = object(
+      { kind: literal("dog"), bark: optional(string()) },
+      "Dog"
+    );
+
+    const schema = oneOf([Cat, Dog]);
+
+    // Exact match on discriminator
+    const catResult = parseWithMeta(schema, { kind: "cat" });
+    expect(catResult.meta.chosenName).toBe("Cat");
+    expect(catResult.value.kind).toBe("cat");
+
+    const dogResult = parseWithMeta(schema, { kind: "dog" });
+    expect(dogResult.meta.chosenName).toBe("Dog");
+    expect(dogResult.value.kind).toBe("dog");
+  });
+
+  test("union discrimination with unknown discriminator value - falls back to first", () => {
+    // When kind is unknown value, both variants accept it
+    const Cat = object({ kind: literal("cat") }, "Cat");
+    const Dog = object({ kind: literal("dog") }, "Dog");
+
+    const schema = oneOf([Cat, Dog]);
+
+    // Unknown discriminator value - both accept, first wins due to tie-break
+    const result = parseWithMeta(schema, { kind: "bat" });
+    expect(result.value.kind).toBe("bat"); // Value preserved
+    expect(result.meta.chosenIndex).toBe(0); // First wins on tie
+  });
+
+  test("union discrimination with unknown discriminator - field coverage decides", () => {
+    // Cat has more fields, should win when discriminator doesn't match either
+    const Cat = object({ kind: literal("cat"), name: string() }, "Cat");
+    const Dog = object({ kind: literal("dog") }, "Dog");
+
+    const schema = oneOf([Cat, Dog]);
+
+    // Unknown kind "bat" + has name field → Cat should win (more field coverage)
+    const result = parseWithMeta(schema, { kind: "bat", name: "Bruce" });
+    expect(result.meta.chosenName).toBe("Cat");
+    expect(result.value.kind).toBe("bat");
+    expect(result.value.name).toBe("Bruce");
+  });
+
+  test("nested objects with open enum fields - field presence decides", () => {
+    const InnerA = object({ foo: literal("foo") });
+    const InnerB = object({ bar: literal("bar") });
+
+    const A = object({ inner: InnerA }, "A");
+    const B = object({ inner: InnerB }, "B");
+
+    type _TypeA = Infer<typeof A>;
+    type _TypeB = Infer<typeof B>;
+
+    const schema = oneOf([A, B]);
+
+    // Payload has "bar" field, should match B
+    const resultB = parseWithMeta(schema, { inner: { bar: "bar" } });
+    expect(resultB.meta.chosenName).toBe("B");
+    expect(resultB.value.inner.bar).toBe("bar");
+
+    // Payload has "foo" field, should match A
+    const resultA = parseWithMeta(schema, { inner: { foo: "foo" } });
+    expect(resultA.meta.chosenName).toBe("A");
+    expect(resultA.value.inner.foo).toBe("foo");
+  });
+
+  test("open enum with nested union - outer discrimination by field coverage", () => {
+    // Inner union variants
+    const CatInner = object({ kind: literal("cat") }, "CatInner");
+    const DogInner = object({ kind: literal("dog") }, "DogInner");
+    const InnerUnion = oneOf([CatInner, DogInner]);
+
+    // Option with both kind and name fields
+    const KindAndName = object({
+      kind: literal("known_kind"),
+      name: literal("known_name"),
+    });
+
+    const OptionA = object({ data: InnerUnion }, "OptionA");
+    const OptionB = object({ data: KindAndName }, "OptionB");
+
+    const schema = oneOf([OptionA, OptionB]);
+
+    // Payload with unknown values + name field → OptionB should win (better field coverage)
+    const result = parseWithMeta(schema, {
+      data: { kind: "unknown", name: "also_unknown" },
+    });
+    expect(result.meta.chosenName).toBe("OptionB");
+    expect(result.value.data.kind).toBe("unknown");
+    expect(result.value.data.name).toBe("also_unknown");
+  });
+
+  test("open enum round-trip - unknown values survive serialization", () => {
+    const Color = oneOf([literal("red"), literal("green"), literal("blue")]);
+    const Theme = object({ color: Color, icon: string() });
+
+    // Parse with unknown enum value
+    const parsed = parse(Theme, { color: "purple", icon: "star" });
+    expect(parsed.color).toBe("purple");
+
+    // Serialize (just stringify)
+    const json = JSON.stringify(parsed);
+
+    // Parse again - value should be preserved
+    const reparsed = parse(Theme, JSON.parse(json));
+    expect(reparsed.color).toBe("purple");
+    expect(reparsed.icon).toBe("star");
+  });
+
+  test("fewer unmatched fields wins over more matched fields with open enums", () => {
+    const Minimal = object({ foo: string() }, "Minimal");
+    const Extended = object(
+      {
+        foo: string(),
+        bar: literal("b"),
+        baz: literal("c"),
+      },
+      "Extended"
+    );
+
+    const schema = oneOf([Minimal, Extended]);
+
+    // Payload only has "foo", Minimal wins (fewer missing required fields)
+    const result1 = parseWithMeta(schema, { foo: "test" });
+    expect(result1.meta.chosenName).toBe("Minimal");
+
+    // Payload has all fields, Extended wins
+    const result2 = parseWithMeta(schema, { foo: "test", bar: "b", baz: "c" });
+    expect(result2.meta.chosenName).toBe("Extended");
+  });
+});
+
 describe("stress scenarios", () => {
   test("oneOf: prefers exact literal discriminator match over unique-property match", () => {
     const A = object(

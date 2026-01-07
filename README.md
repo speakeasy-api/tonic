@@ -108,6 +108,7 @@ For object schemas, Tonic examines properties:
 | Unique property present (key exists only in this variant)                       | +10   |
 | Required property present                                                       | +5    |
 | Property value matches expected type                                            | +2    |
+| Input key exists in schema (field coverage)                                     | +1    |
 | Required property missing                                                       | -10   |
 | Discriminator field has wrong type                                              | -50   |
 | Discriminator field has same type, different value                              | +5    |
