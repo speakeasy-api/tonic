@@ -1672,3 +1672,341 @@ describe("robustness issues", () => {
     expect(result.meta.chosenName).toBe("ExactMatch");
   });
 });
+
+// Make sure all examples in README.md actually work as advertised
+describe("readme examples", () => {
+  describe("what tonic does - basic User example", () => {
+    const User = object({
+      id: number(),
+      name: string(),
+    });
+
+    test("exact match", () => {
+      expect(parse(User, { id: 123, name: "alice" })).toEqual({
+        id: 123,
+        name: "alice",
+      });
+    });
+
+    test("string to number coercion", () => {
+      expect(parse(User, { id: "123", name: "alice" })).toEqual({
+        id: 123,
+        name: "alice",
+      });
+    });
+
+    test("extra field preserved", () => {
+      expect(parse(User, { id: 123, name: "alice", role: "admin" })).toEqual({
+        id: 123,
+        name: "alice",
+        role: "admin",
+      });
+    });
+
+    test("missing string defaults to empty string", () => {
+      expect(parse(User, { id: 123 })).toEqual({
+        id: 123,
+        name: "",
+      });
+    });
+
+    test("null input defaults all fields", () => {
+      expect(parse(User, null)).toEqual({
+        id: 0,
+        name: "",
+      });
+    });
+  });
+
+  describe("parsing API responses", () => {
+    const ApiResponse = object({
+      data: array(
+        object({
+          id: string(),
+          createdAt: string(),
+          status: literal("active"),
+        })
+      ),
+      cursor: optional(string()),
+    });
+
+    test("parses valid response", () => {
+      const input = {
+        data: [
+          { id: "1", createdAt: "2024-01-01", status: "active" },
+          { id: "2", createdAt: "2024-01-02", status: "inactive" },
+        ],
+        cursor: "abc123",
+      };
+      const result = parse(ApiResponse, input);
+      expect(result.data).toHaveLength(2);
+      expect(result.data[0]).toEqual({
+        id: "1",
+        createdAt: "2024-01-01",
+        status: "active",
+      });
+      expect(result.data[1]).toEqual({
+        id: "2",
+        createdAt: "2024-01-02",
+        status: "inactive",
+      });
+      expect(result.cursor).toBe("abc123");
+    });
+
+    test("handles missing cursor", () => {
+      const input = {
+        data: [{ id: "1", createdAt: "2024-01-01", status: "active" }],
+      };
+      const result = parse(ApiResponse, input);
+      expect(result.cursor).toBeUndefined();
+      expect("cursor" in result).toBe(false);
+    });
+
+    test("handles extra fields in data items", () => {
+      const input = {
+        data: [
+          {
+            id: "1",
+            createdAt: "2024-01-01",
+            status: "active",
+            newField: "extra",
+          },
+        ],
+      };
+      const result = parse(ApiResponse, input);
+      expect(result.data[0]!.newField).toBe("extra");
+    });
+  });
+
+  describe("discriminated unions - webhook events", () => {
+    const WebhookEvent = union(
+      object(
+        {
+          type: literal("user.created"),
+          user: object({ id: string(), email: string() }),
+        },
+        "UserCreated"
+      ),
+      object(
+        { type: literal("user.deleted"), userId: string() },
+        "UserDeleted"
+      ),
+      object(
+        {
+          type: literal("invoice.paid"),
+          invoiceId: string(),
+          amount: number(),
+        },
+        "InvoicePaid"
+      )
+    );
+
+    test("known type exact match routes to UserDeleted", () => {
+      const result = parse(WebhookEvent, {
+        type: "user.deleted",
+        userId: "u_123",
+      });
+      expect(result.type).toBe("user.deleted");
+      expect(result.userId).toBe("u_123");
+    });
+
+    test("Known type, shape changed routes to UserCreated, fills expected fields", () => {
+      const result = parse(WebhookEvent, {
+        type: "user.created",
+        userId: "u_123",
+      });
+      expect(result.type).toBe("user.created");
+      expect(result.userId).toBe("u_123");
+      expect(result.user).toStrictEqual({ id: "", email: "" });
+    });
+
+    test("known type with extra fields preserves extra data", () => {
+      const result = parse(WebhookEvent, {
+        type: "user.deleted",
+        userId: "u_123",
+        reason: "spam",
+      });
+      expect(result.type).toBe("user.deleted");
+      expect(result.userId).toBe("u_123");
+      expect((result as Record<string, unknown>).reason).toBe("spam");
+    });
+
+    test("unknown type coerces to closest structural match", () => {
+      const result = parse(WebhookEvent, {
+        type: "user.updated",
+        user: { id: "u_123", email: "new@example.com" },
+      });
+      expect(result.type).toBe("user.updated");
+      expect(result.user).toEqual({ id: "u_123", email: "new@example.com" });
+    });
+
+    test("parseWithMeta returns correct chosen name", () => {
+      const { value, meta } = parseWithMeta(WebhookEvent, {
+        type: "invoice.paid",
+        invoiceId: "inv_123",
+        amount: 99.99,
+      });
+      expect(meta.chosenName).toBe("InvoicePaid");
+      expect(value.type).toBe("invoice.paid");
+    });
+  });
+
+  describe("open enums", () => {
+    const Status = union(
+      literal("pending"),
+      literal("active"),
+      literal("archived")
+    );
+
+    test("exact match for known value", () => {
+      expect(parse(Status, "pending")).toBe("pending");
+    });
+
+    test("unknown value preserved", () => {
+      expect(parse(Status, "suspended")).toBe("suspended");
+    });
+
+    test("unknown enum in object passes through", () => {
+      const Item = object({
+        id: string(),
+        status: Status,
+      });
+
+      const result = parse(Item, { id: "123", status: "on_hold" });
+      expect(result).toEqual({ id: "123", status: "on_hold" });
+    });
+  });
+
+  describe("handling missing data", () => {
+    const Config = object({
+      timeout: number(),
+      retries: number(),
+      debug: boolean(),
+      endpoint: string(),
+    });
+
+    test("empty object gets all defaults", () => {
+      expect(parse(Config, {})).toEqual({
+        timeout: 0,
+        retries: 0,
+        debug: false,
+        endpoint: "",
+      });
+    });
+
+    test("partial object fills in missing defaults", () => {
+      expect(parse(Config, { timeout: 30 })).toEqual({
+        timeout: 30,
+        retries: 0,
+        debug: false,
+        endpoint: "",
+      });
+    });
+  });
+
+  describe("optional vs nullable", () => {
+    const Profile = object({
+      name: string(),
+      bio: optional(string()),
+      avatar: nullable(string()),
+    });
+
+    test("optional field omitted from output", () => {
+      const result = parse(Profile, { name: "alice" });
+      expect(result).toEqual({ name: "alice", avatar: null });
+      expect("bio" in result).toBe(false);
+    });
+
+    test("explicit undefined treated same as missing", () => {
+      const result = parse(Profile, {
+        name: "alice",
+        bio: undefined,
+        avatar: undefined,
+      });
+      expect(result).toEqual({ name: "alice", avatar: null });
+      expect("bio" in result).toBe(false);
+    });
+
+    test("provided values preserved", () => {
+      const result = parse(Profile, {
+        name: "alice",
+        bio: "hello",
+        avatar: "pic.jpg",
+      });
+      expect(result).toEqual({
+        name: "alice",
+        bio: "hello",
+        avatar: "pic.jpg",
+      });
+    });
+  });
+
+  describe("array coercion", () => {
+    const Tags = array(string());
+
+    test("array passes through", () => {
+      expect(parse(Tags, ["a", "b"])).toEqual(["a", "b"]);
+    });
+
+    test("single value becomes single-element array", () => {
+      expect(parse(Tags, "single")).toEqual(["single"]);
+    });
+
+    test("null becomes empty array", () => {
+      expect(parse(Tags, null)).toEqual([]);
+    });
+
+    test("undefined becomes empty array", () => {
+      expect(parse(Tags, undefined)).toEqual([]);
+    });
+  });
+
+  describe("nested object discrimination", () => {
+    const A = object({ inner: object({ foo: string() }) }, "A");
+    const B = object({ inner: object({ bar: string() }) }, "B");
+    const Schema = union(A, B);
+
+    test("selects B based on nested bar field", () => {
+      const { value, meta } = parseWithMeta(Schema, {
+        inner: { bar: "hello" },
+      });
+      expect(meta.chosenName).toBe("B");
+      expect(value.inner.bar).toBe("hello");
+    });
+
+    test("selects A based on nested foo field", () => {
+      const { value, meta } = parseWithMeta(Schema, {
+        inner: { foo: "world" },
+      });
+      expect(meta.chosenName).toBe("A");
+      expect(value.inner.foo).toBe("world");
+    });
+  });
+
+  describe("inspecting discrimination", () => {
+    const Event = union(
+      object({ type: literal("click"), x: number(), y: number() }, "Click"),
+      object({ type: literal("scroll"), delta: number() }, "Scroll")
+    );
+
+    test("meta contains chosenIndex", () => {
+      const { meta } = parseWithMeta(Event, { type: "scroll", delta: 100 });
+      expect(meta.chosenIndex).toBe(1);
+    });
+
+    test("meta contains chosenName", () => {
+      const { meta } = parseWithMeta(Event, { type: "click", x: 10, y: 20 });
+      expect(meta.chosenName).toBe("Click");
+    });
+
+    test("meta contains candidates array", () => {
+      const { meta } = parseWithMeta(Event, { type: "click", x: 10, y: 20 });
+      expect(meta.candidates).toBeInstanceOf(Array);
+      expect(meta.candidates.length).toBe(2);
+      expect(meta.candidates[0]!.name).toBe("Click");
+      expect(meta.candidates[0]!.score).toBeGreaterThan(
+        meta.candidates[1]!.score
+      );
+    });
+  });
+});
