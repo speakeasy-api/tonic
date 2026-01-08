@@ -191,7 +191,18 @@ export function object<T extends ObjectShape>(
 
     for (const key in shape) {
       const propSchema = shape[key]!;
-      const propValue = input[key];
+
+      // Check for field alias (_from)
+      const fromKey =
+        "_from" in propSchema && typeof propSchema._from === "string"
+          ? propSchema._from
+          : key;
+      const propValue = input[fromKey];
+
+      // Delete the alias key if different from schema key
+      if (fromKey !== key && fromKey in input) {
+        delete input[fromKey];
+      }
 
       if ("_optional" in propSchema && propValue === undefined) {
         delete input[key];
@@ -224,7 +235,7 @@ export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
     return inner(value);
   }) as OptionalSchema<Infer<T>>;
 
-  (schema as unknown as { _optional: true })._optional = true;
+  schema._optional = true;
   (schema as unknown as { _inner: T })._inner = inner;
   return schema;
 }
@@ -235,8 +246,27 @@ export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
     return inner(value);
   }) as NullableSchema<Infer<T>>;
 
-  (schema as unknown as { _nullable: true })._nullable = true;
+  schema._nullable = true;
   (schema as unknown as { _inner: T })._inner = inner;
+  return schema;
+}
+
+interface FieldSchema<T = unknown> extends Schema<T> {
+  _from?: string;
+}
+
+type FieldReturn<T extends Schema> = FieldSchema<Infer<T>> &
+  (T extends OptionalSchema ? { _optional: true } : {});
+
+export function field<T extends Schema>(
+  inner: T,
+  options?: { from?: string }
+): FieldReturn<T> {
+  const schema = ((value: unknown) => inner(value)) as FieldReturn<T>;
+  Object.assign(schema, inner);
+  if (options?.from) {
+    schema._from = options.from;
+  }
   return schema;
 }
 
@@ -252,6 +282,17 @@ interface CandidateScore {
   score: number;
   typeMatch: boolean;
   exactMatch: boolean;
+}
+
+// Helper to get the input key for a schema (handles _from alias)
+function getInputKey(propSchema: Schema, schemaKey: string): string {
+  if (
+    "_from" in propSchema &&
+    typeof (propSchema as { _from?: string })._from === "string"
+  ) {
+    return (propSchema as { _from: string })._from;
+  }
+  return schemaKey;
 }
 
 function scoreNestedObject(
@@ -274,18 +315,28 @@ function scoreNestedObject(
 
     for (const key in shape) {
       const propSchema = shape[key]!;
-      if (propSchema._kind === "literal") {
-        const litSchema = propSchema as Schema & {
+      const inputKey = getInputKey(propSchema, key);
+
+      // Check for literal in propSchema or in inner schema (for field wrapper)
+      const literalSchema =
+        propSchema._kind === "literal"
+          ? propSchema
+          : "_literal" in propSchema
+          ? propSchema
+          : null;
+
+      if (literalSchema && "_literal" in literalSchema) {
+        const litSchema = literalSchema as Schema & {
           _literal: string | number | boolean;
         };
         const expected = litSchema._literal;
-        if (key in value) {
-          if (value[key] === expected) {
+        if (inputKey in value) {
+          if (value[inputKey] === expected) {
             totalScore += 50;
             if (isRoot) {
               hasExactDiscriminator = true;
             }
-          } else if (typeof value[key] === typeof expected) {
+          } else if (typeof value[inputKey] === typeof expected) {
             totalScore += 5;
             if (isRoot) {
               hasLiteralMismatch = true;
@@ -304,10 +355,12 @@ function scoreNestedObject(
       const propSchema = shape[key]!;
       if ("_optional" in propSchema) continue;
 
-      if (key in value) {
+      const inputKey = getInputKey(propSchema, key);
+
+      if (inputKey in value) {
         totalScore += 5;
 
-        const propValue = value[key];
+        const propValue = value[inputKey];
         const innerKind = propSchema._kind;
         if (innerKind === "string" && typeof propValue === "string") {
           totalScore += 2;

@@ -184,6 +184,59 @@ parse(Tags, "single"); // ["single"]
 parse(Tags, null); // []
 ```
 
+### Field renaming
+
+The `field` wrapper lets your schema diverge from the input shape. Map input keys to different output keys. This is uuseful for naming convention differences, legacy field names, or reshaping third-party API responses to match your domain model:
+
+```typescript
+const User = object({
+  firstName: field(string(), { from: "first_name" }),
+  lastName: field(string(), { from: "last_name" }),
+  createdAt: field(string(), { from: "created_at" }),
+  isActive: field(boolean(), { from: "is_active" }),
+});
+
+parse(User, {
+  first_name: "Alice",
+  last_name: "Smith",
+  created_at: "2024-01-01",
+  is_active: true,
+});
+// → { firstName: "Alice", lastName: "Smith", createdAt: "2024-01-01", isActive: true }
+```
+
+Works with all schema types including `optional` and `nullable`:
+
+```typescript
+const Profile = object({
+  displayName: field(string(), { from: "display_name" }),
+  avatarUrl: field(optional(string()), { from: "avatar_url" }),
+  bio: field(nullable(string()), { from: "bio_text" }),
+});
+
+parse(Profile, { display_name: "alice" });
+// → { displayName: "alice", bio: null }
+// Note: avatarUrl is omitted (optional + missing)
+```
+
+Aliased fields work with union discrimination:
+
+```typescript
+const Payment = union(
+  object({
+    paymentType: field(literal("card"), { from: "payment_type" }),
+    lastFour: field(string(), { from: "last_four" }),
+  }),
+  object({
+    paymentType: field(literal("bank"), { from: "payment_type" }),
+    accountNumber: field(string(), { from: "account_number" }),
+  })
+);
+
+parse(Payment, { payment_type: "card", last_four: "4242" });
+// → { paymentType: "card", lastFour: "4242" }
+```
+
 ### Type inference
 
 ```typescript
@@ -226,6 +279,7 @@ object({ key: schema }); // preserves extra keys
 array(schema); // coerces non-arrays to single-element
 optional(schema); // omits key when undefined
 nullable(schema); // converts undefined to null
+field(schema, { from: "key" }); // reads from aliased input key
 ```
 
 ### Unions

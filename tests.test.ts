@@ -12,6 +12,7 @@ import {
   union,
   parse,
   parseWithMeta,
+  field,
   type Infer,
 } from "./index";
 
@@ -2008,5 +2009,604 @@ describe("readme examples", () => {
         meta.candidates[1]!.score
       );
     });
+  });
+
+  describe("field renaming", () => {
+    test("basic snake_case to camelCase mapping", () => {
+      const User = object({
+        firstName: field(string(), { from: "first_name" }),
+        lastName: field(string(), { from: "last_name" }),
+        createdAt: field(string(), { from: "created_at" }),
+        isActive: field(boolean(), { from: "is_active" }),
+      });
+
+      expect(
+        parse(User, {
+          first_name: "Alice",
+          last_name: "Smith",
+          created_at: "2024-01-01",
+          is_active: true,
+        })
+      ).toEqual({
+        firstName: "Alice",
+        lastName: "Smith",
+        createdAt: "2024-01-01",
+        isActive: true,
+      });
+    });
+
+    test("works with optional and nullable", () => {
+      const Profile = object({
+        displayName: field(string(), { from: "display_name" }),
+        avatarUrl: field(optional(string()), { from: "avatar_url" }),
+        bio: field(nullable(string()), { from: "bio_text" }),
+      });
+
+      const result = parse(Profile, { display_name: "alice" });
+      expect(result).toEqual({ displayName: "alice", bio: null });
+      expect("avatarUrl" in result).toBe(false);
+    });
+
+    test("works with union discrimination", () => {
+      const Payment = union(
+        object({
+          paymentType: field(literal("card"), { from: "payment_type" }),
+          lastFour: field(string(), { from: "last_four" }),
+        }),
+        object({
+          paymentType: field(literal("bank"), { from: "payment_type" }),
+          accountNumber: field(string(), { from: "account_number" }),
+        })
+      );
+
+      expect(
+        parse(Payment, { payment_type: "card", last_four: "4242" })
+      ).toEqual({
+        paymentType: "card",
+        lastFour: "4242",
+      });
+    });
+  });
+});
+
+// ============================================================================
+// FIELD RENAMING / ALIAS
+// ============================================================================
+
+describe("field schema - basic renaming", () => {
+  test("reads from alias key and outputs to schema key", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, { first_name: "Daniel" });
+    expect(result).toEqual({ firstName: "Daniel" });
+  });
+
+  test("multiple aliased fields", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+      lastName: field(string(), { from: "last_name" }),
+      emailAddress: field(string(), { from: "email_address" }),
+    });
+    const result = parse(User, {
+      first_name: "Daniel",
+      last_name: "Kov",
+      email_address: "daniel@example.com",
+    });
+    expect(result).toEqual({
+      firstName: "Daniel",
+      lastName: "Kov",
+      emailAddress: "daniel@example.com",
+    });
+  });
+
+  test("mix of aliased and non-aliased fields", () => {
+    const User = object({
+      id: number(),
+      firstName: field(string(), { from: "first_name" }),
+      active: boolean(),
+    });
+    const result = parse(User, {
+      id: 123,
+      first_name: "Daniel",
+      active: true,
+    });
+    expect(result).toEqual({
+      id: 123,
+      firstName: "Daniel",
+      active: true,
+    });
+  });
+
+  test("aliased field with coercion", () => {
+    const Config = object({
+      maxRetries: field(number(), { from: "max_retries" }),
+      isEnabled: field(boolean(), { from: "is_enabled" }),
+    });
+    const result = parse(Config, {
+      max_retries: "5",
+      is_enabled: "true",
+    });
+    expect(result).toEqual({
+      maxRetries: 5,
+      isEnabled: true,
+    });
+  });
+
+  test("missing aliased field uses default", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, {});
+    expect(result).toEqual({ firstName: "" });
+  });
+
+  test("aliased field with null input uses default", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, { first_name: null });
+    expect(result).toEqual({ firstName: "" });
+  });
+});
+
+describe("field schema - composition with optional", () => {
+  test("optional aliased field - missing", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+      middleName: field(optional(string()), { from: "middle_name" }),
+    });
+    const result = parse(User, { first_name: "Daniel" });
+    expect(result).toEqual({ firstName: "Daniel" });
+    expect("middleName" in result).toBe(false);
+  });
+
+  test("optional aliased field - present", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+      middleName: field(optional(string()), { from: "middle_name" }),
+    });
+    const result = parse(User, {
+      first_name: "Daniel",
+      middle_name: "James",
+    });
+    expect(result).toEqual({
+      firstName: "Daniel",
+      middleName: "James",
+    });
+  });
+
+  test("optional aliased field - explicit undefined", () => {
+    const User = object({
+      middleName: field(optional(string()), { from: "middle_name" }),
+    });
+    const result = parse(User, { middle_name: undefined });
+    expect("middleName" in result).toBe(false);
+  });
+});
+
+describe("field schema - composition with nullable", () => {
+  test("nullable aliased field - null input", () => {
+    const User = object({
+      avatar: field(nullable(string()), { from: "avatar_url" }),
+    });
+    const result = parse(User, { avatar_url: null });
+    expect(result).toEqual({ avatar: null });
+  });
+
+  test("nullable aliased field - undefined input", () => {
+    const User = object({
+      avatar: field(nullable(string()), { from: "avatar_url" }),
+    });
+    const result = parse(User, { avatar_url: undefined });
+    expect(result).toEqual({ avatar: null });
+  });
+
+  test("nullable aliased field - missing", () => {
+    const User = object({
+      avatar: field(nullable(string()), { from: "avatar_url" }),
+    });
+    const result = parse(User, {});
+    expect(result).toEqual({ avatar: null });
+  });
+
+  test("nullable aliased field - present", () => {
+    const User = object({
+      avatar: field(nullable(string()), { from: "avatar_url" }),
+    });
+    const result = parse(User, { avatar_url: "pic.jpg" });
+    expect(result).toEqual({ avatar: "pic.jpg" });
+  });
+});
+
+describe("field schema - nested objects", () => {
+  test("aliased field in nested object", () => {
+    const User = object({
+      profile: object({
+        displayName: field(string(), { from: "display_name" }),
+      }),
+    });
+    const result = parse(User, {
+      profile: { display_name: "Danny" },
+    });
+    expect(result).toEqual({
+      profile: { displayName: "Danny" },
+    });
+  });
+
+  test("deeply nested aliased fields", () => {
+    const Response = object({
+      data: object({
+        user: object({
+          firstName: field(string(), { from: "first_name" }),
+          lastName: field(string(), { from: "last_name" }),
+        }),
+      }),
+    });
+    const result = parse(Response, {
+      data: {
+        user: {
+          first_name: "Daniel",
+          last_name: "Kov",
+        },
+      },
+    });
+    expect(result).toEqual({
+      data: {
+        user: {
+          firstName: "Daniel",
+          lastName: "Kov",
+        },
+      },
+    });
+  });
+
+  test("aliased nested object field", () => {
+    const User = object({
+      contactInfo: field(
+        object({
+          email: string(),
+          phone: string(),
+        }),
+        { from: "contact_info" }
+      ),
+    });
+    const result = parse(User, {
+      contact_info: {
+        email: "test@example.com",
+        phone: "123-456",
+      },
+    });
+    expect(result).toEqual({
+      contactInfo: {
+        email: "test@example.com",
+        phone: "123-456",
+      },
+    });
+  });
+});
+
+describe("field schema - arrays", () => {
+  test("array of objects with aliased fields", () => {
+    const UserList = array(
+      object({
+        firstName: field(string(), { from: "first_name" }),
+        lastName: field(string(), { from: "last_name" }),
+      })
+    );
+    const result = parse(UserList, [
+      { first_name: "Alice", last_name: "Smith" },
+      { first_name: "Bob", last_name: "Jones" },
+    ]);
+    expect(result).toEqual([
+      { firstName: "Alice", lastName: "Smith" },
+      { firstName: "Bob", lastName: "Jones" },
+    ]);
+  });
+
+  test("aliased array field", () => {
+    const User = object({
+      favoriteColors: field(array(string()), { from: "favorite_colors" }),
+    });
+    const result = parse(User, {
+      favorite_colors: ["red", "blue", "green"],
+    });
+    expect(result).toEqual({
+      favoriteColors: ["red", "blue", "green"],
+    });
+  });
+
+  test("aliased field with array of nested objects", () => {
+    const Response = object({
+      userList: field(
+        array(
+          object({
+            userId: field(number(), { from: "user_id" }),
+          })
+        ),
+        { from: "user_list" }
+      ),
+    });
+    const result = parse(Response, {
+      user_list: [{ user_id: 1 }, { user_id: 2 }],
+    });
+    expect(result).toEqual({
+      userList: [{ userId: 1 }, { userId: 2 }],
+    });
+  });
+});
+
+describe("field schema - union discrimination", () => {
+  test("aliased discriminator field", () => {
+    const Card = object(
+      {
+        paymentType: field(literal("card"), { from: "payment_type" }),
+        lastFour: field(string(), { from: "last_four" }),
+      },
+      "Card"
+    );
+    const Bank = object(
+      {
+        paymentType: field(literal("bank"), { from: "payment_type" }),
+        accountNumber: field(string(), { from: "account_number" }),
+      },
+      "Bank"
+    );
+    const Payment = union(Card, Bank);
+
+    const cardResult = parseWithMeta(Payment, {
+      payment_type: "card",
+      last_four: "4242",
+    });
+    expect(cardResult.meta.chosenName).toBe("Card");
+    expect(cardResult.value).toEqual({
+      paymentType: "card",
+      lastFour: "4242",
+    });
+
+    const bankResult = parseWithMeta(Payment, {
+      payment_type: "bank",
+      account_number: "12345678",
+    });
+    expect(bankResult.meta.chosenName).toBe("Bank");
+    expect(bankResult.value).toEqual({
+      paymentType: "bank",
+      accountNumber: "12345678",
+    });
+  });
+
+  test("union with mix of aliased and non-aliased fields", () => {
+    const TypeA = object(
+      {
+        kind: literal("a"),
+        valueA: field(string(), { from: "value_a" }),
+      },
+      "TypeA"
+    );
+    const TypeB = object(
+      {
+        kind: literal("b"),
+        valueB: string(),
+      },
+      "TypeB"
+    );
+    const Schema = union(TypeA, TypeB);
+
+    const resultA = parseWithMeta(Schema, { kind: "a", value_a: "test" });
+    expect(resultA.meta.chosenName).toBe("TypeA");
+    expect(resultA.value).toEqual({ kind: "a", valueA: "test" });
+
+    const resultB = parseWithMeta(Schema, { kind: "b", valueB: "test" });
+    expect(resultB.meta.chosenName).toBe("TypeB");
+    expect(resultB.value).toEqual({ kind: "b", valueB: "test" });
+  });
+});
+
+describe("field schema - unknown keys handling", () => {
+  test("unknown keys pass through alongside aliased fields", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, {
+      first_name: "Daniel",
+      extra_field: "preserved",
+      another: 123,
+    });
+    expect(result).toEqual({
+      firstName: "Daniel",
+      extra_field: "preserved",
+      another: 123,
+    });
+  });
+
+  test("original alias key is not preserved in output", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, { first_name: "Daniel" });
+    expect(result).toEqual({ firstName: "Daniel" });
+    expect("first_name" in result).toBe(false);
+  });
+});
+
+describe("field schema - edge cases", () => {
+  test("schema key matches alias (no-op)", () => {
+    const User = object({
+      name: field(string(), { from: "name" }),
+    });
+    const result = parse(User, { name: "Daniel" });
+    expect(result).toEqual({ name: "Daniel" });
+  });
+
+  test("field without options acts as passthrough", () => {
+    const User = object({
+      firstName: field(string()),
+    });
+    const result = parse(User, { firstName: "Daniel" });
+    expect(result).toEqual({ firstName: "Daniel" });
+  });
+
+  test("empty from string uses schema key", () => {
+    const User = object({
+      firstName: field(string(), { from: "" }),
+    });
+    const result = parse(User, { firstName: "Daniel" });
+    expect(result).toEqual({ firstName: "Daniel" });
+  });
+
+  test("aliased field with literal schema", () => {
+    const Config = object({
+      status: field(literal("active"), { from: "current_status" }),
+    });
+    const result = parse(Config, { current_status: "active" });
+    expect(result).toEqual({ status: "active" });
+  });
+
+  test("aliased field with literal defaults when missing", () => {
+    const Config = object({
+      status: field(literal("active"), { from: "current_status" }),
+    });
+    const result = parse(Config, {});
+    expect(result).toEqual({ status: "active" });
+  });
+});
+
+describe("field schema - type inference", () => {
+  test("output type uses schema key names", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+      lastName: field(string(), { from: "last_name" }),
+      age: number(),
+    });
+
+    type User = Infer<typeof User>;
+
+    // This should compile - type uses firstName, not first_name
+    const user: User = {
+      firstName: "Daniel",
+      lastName: "Kov",
+      age: 30,
+    };
+
+    expect(user.firstName).toBe("Daniel");
+    expect(user.lastName).toBe("Kov");
+  });
+
+  test("optional aliased field reflected in type", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+      middleName: field(optional(string()), { from: "middle_name" }),
+    });
+
+    type User = Infer<typeof User>;
+
+    // Should compile with middleName optional
+    const user1: User = { firstName: "Daniel" };
+    const user2: User = { firstName: "Daniel", middleName: "James" };
+
+    expect(user1.firstName).toBe("Daniel");
+    expect(user2.middleName).toBe("James");
+  });
+
+  test("nullable aliased field reflected in type", () => {
+    const User = object({
+      avatar: field(nullable(string()), { from: "avatar_url" }),
+    });
+
+    type User = Infer<typeof User>;
+
+    // Should compile with avatar being string | null
+    const user1: User = { avatar: null };
+    const user2: User = { avatar: "pic.jpg" };
+
+    expect(user1.avatar).toBeNull();
+    expect(user2.avatar).toBe("pic.jpg");
+  });
+});
+
+describe("field schema - real world scenarios", () => {
+  test("API response with snake_case to camelCase conversion", () => {
+    const ApiUser = object({
+      userId: field(number(), { from: "user_id" }),
+      firstName: field(string(), { from: "first_name" }),
+      lastName: field(string(), { from: "last_name" }),
+      emailAddress: field(string(), { from: "email_address" }),
+      createdAt: field(string(), { from: "created_at" }),
+      updatedAt: field(optional(string()), { from: "updated_at" }),
+      isActive: field(boolean(), { from: "is_active" }),
+    });
+
+    const result = parse(ApiUser, {
+      user_id: 123,
+      first_name: "Daniel",
+      last_name: "Kov",
+      email_address: "daniel@example.com",
+      created_at: "2024-01-01T00:00:00Z",
+      is_active: true,
+    });
+
+    expect(result).toEqual({
+      userId: 123,
+      firstName: "Daniel",
+      lastName: "Kov",
+      emailAddress: "daniel@example.com",
+      createdAt: "2024-01-01T00:00:00Z",
+      isActive: true,
+    });
+    expect("updatedAt" in result).toBe(false);
+  });
+
+  test("webhook payload transformation", () => {
+    const WebhookPayload = object({
+      eventType: field(literal("user.created"), { from: "event_type" }),
+      eventId: field(string(), { from: "event_id" }),
+      timestamp: field(number(), { from: "event_timestamp" }),
+      data: object({
+        userId: field(string(), { from: "user_id" }),
+        userEmail: field(string(), { from: "user_email" }),
+      }),
+    });
+
+    const result = parse(WebhookPayload, {
+      event_type: "user.created",
+      event_id: "evt_123",
+      event_timestamp: 1704067200,
+      data: {
+        user_id: "usr_456",
+        user_email: "new@example.com",
+      },
+    });
+
+    expect(result).toEqual({
+      eventType: "user.created",
+      eventId: "evt_123",
+      timestamp: 1704067200,
+      data: {
+        userId: "usr_456",
+        userEmail: "new@example.com",
+      },
+    });
+  });
+
+  test("config file with various naming conventions", () => {
+    const Config = object({
+      databaseUrl: field(string(), { from: "DATABASE_URL" }),
+      maxConnections: field(number(), { from: "MAX_CONNECTIONS" }),
+      enableLogging: field(boolean(), { from: "ENABLE_LOGGING" }),
+      apiKey: field(optional(string()), { from: "API_KEY" }),
+    });
+
+    const result = parse(Config, {
+      DATABASE_URL: "postgres://localhost:5432/db",
+      MAX_CONNECTIONS: "10",
+      ENABLE_LOGGING: "true",
+    });
+
+    expect(result).toEqual({
+      databaseUrl: "postgres://localhost:5432/db",
+      maxConnections: 10,
+      enableLogging: true,
+    });
+    expect("apiKey" in result).toBe(false);
   });
 });
