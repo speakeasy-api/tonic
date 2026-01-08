@@ -19,6 +19,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+type NonEmptyArray<T> = [T, ...T[]];
+
+function isNonEmptyArray<T>(value: T[]): value is NonEmptyArray<T> {
+  return value.length > 0;
+}
+
 function createSchema<T>(
   kind: string,
   defaultValue: T,
@@ -70,13 +76,15 @@ export function boolean(): Schema<boolean> {
   });
 }
 
-type LiteralOutput<T extends string | number | boolean> = T extends string
+type LiteralOutput<T> = T extends string
   ? T | (string & {})
   : T extends number
   ? T | (number & {})
-  : T | (boolean & {});
+  : T extends boolean
+  ? T | (boolean & {})
+  : T;
 
-export function literal<T extends string | number | boolean>(
+export function literal<T>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
   const defaultVal = expected as LiteralOutput<T>;
@@ -442,14 +450,10 @@ function computeKeyCounts(schemas: Schema[]): Record<string, number> {
 }
 
 function pickUnion(
-  schemas: Schema[],
+  schemas: NonEmptyArray<Schema>,
   value: unknown,
   collectCandidates: boolean = false
 ): { best: CandidateScore | undefined; candidates: CandidateScore[] } {
-  if (schemas.length === 0) {
-    return { best: undefined, candidates: [] };
-  }
-
   const keyCounts = computeKeyCounts(schemas);
 
   let best: CandidateScore | undefined;
@@ -482,7 +486,7 @@ function pickUnion(
 export function union<T extends Schema[]>(
   ...schemas: T
 ): Schema<Infer<T[number]>> & { _schemas: T } {
-  if (schemas.length === 0) {
+  if (!isNonEmptyArray(schemas)) {
     const schema = createSchema("union", undefined as Infer<T[number]>, () => {
       return undefined as Infer<T[number]>;
     }) as Schema<Infer<T[number]>> & { _schemas: T };
@@ -514,7 +518,7 @@ export function parseWithMeta<T extends Schema>(
     const unionSchema = schema as unknown as Schema & { _schemas: Schema[] };
     const schemas = unionSchema._schemas;
 
-    if (schemas.length === 0) {
+    if (!isNonEmptyArray(schemas)) {
       return {
         value: undefined as Infer<T>,
         meta: {

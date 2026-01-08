@@ -154,6 +154,20 @@ describe("boolean schema", () => {
     const schema = boolean();
     expect(parse(schema, "")).toBe(false);
   });
+
+  test("coerces non-0/1 numbers to boolean", () => {
+    const schema = boolean();
+    expect(parse(schema, 42)).toBe(true);
+    expect(parse(schema, -1)).toBe(true);
+    expect(parse(schema, 0.5)).toBe(true);
+  });
+
+  test("coerces other types via Boolean()", () => {
+    const schema = boolean();
+    expect(parse(schema, {})).toBe(true);
+    expect(parse(schema, [])).toBe(true);
+    expect(parse(schema, Symbol("test"))).toBe(true);
+  });
 });
 
 // ============================================================================
@@ -233,6 +247,51 @@ describe("literal schema", () => {
     type BoolType = Infer<typeof boolLit>;
     const b: BoolType = false;
     expect(b).toBe(false);
+  });
+
+  test("string literal returns expected for non-coercible types", () => {
+    const schema = literal("hello");
+    expect(parse(schema, {})).toBe("hello");
+    expect(parse(schema, [])).toBe("hello");
+    expect(parse(schema, Symbol("test"))).toBe("hello");
+  });
+
+  test("number literal returns expected for unparseable string", () => {
+    const schema = literal(42);
+    expect(parse(schema, "not a number")).toBe(42);
+  });
+
+  test("number literal coerces boolean to number", () => {
+    const schema = literal(42);
+    expect(parse(schema, true)).toBe(1);
+    expect(parse(schema, false)).toBe(0);
+  });
+
+  test("boolean literal coerces non-empty string to true", () => {
+    const schema = literal(true);
+    expect(parse(schema, "hello")).toBe(true);
+    expect(parse(schema, "")).toBe(false);
+  });
+
+  test("boolean literal coerces non-0/1 numbers", () => {
+    const schema = literal(true);
+    expect(parse(schema, 42)).toBe(true);
+    expect(parse(schema, -1)).toBe(true);
+  });
+
+  test("boolean literal returns expected for non-coercible types", () => {
+    const schema = literal(true);
+    expect(parse(schema, {})).toBe(true);
+    expect(parse(schema, [])).toBe(true);
+    expect(parse(schema, Symbol("test"))).toBe(true);
+    expect(parse(schema, () => {})).toBe(true);
+  });
+
+  test("literal with non-primitive expected returns expected for any input", () => {
+    const schema = literal({ custom: "object" });
+    expect(parse(schema, "test")).toEqual({ custom: "object" });
+    expect(parse(schema, 42)).toEqual({ custom: "object" });
+    expect(parse(schema, true)).toEqual({ custom: "object" });
   });
 });
 
@@ -977,7 +1036,7 @@ describe("stress scenarios", () => {
     // Defaults for missing schema props should be injected
     expect(out.value.aOnly).toBe("");
     // Unknown keys should pass through
-    expect((out.value as any).bOnly).toBe("present");
+    expect(out.value.bOnly).toBe("present");
   });
 
   test("oneOf: deterministic tie-break when shapes are identical (index-stable)", () => {
@@ -1067,13 +1126,19 @@ describe("stress scenarios", () => {
     expect(out.length).toBe(input.length);
 
     // The first element should parse as Obj
-    expect(typeof (out[0] as any).kind).toBe("string");
-    expect((out[0] as any).id).toBe(123);
+    const out1 = out[0];
+    if (typeof out1 !== "object" || out1 === null || Array.isArray(out1)) {
+      throw new Error("expected out1 to be object, got: " + typeof out1);
+    }
+    expect(out1.kind).toBe("obj");
+    expect(out1.id).toBe(123);
 
     // The array branch should come out as numbers
     const arr = out[5];
     expect(Array.isArray(arr)).toBe(true);
-    for (const x of arr as any[]) expect(typeof x).toBe("number");
+    Array.prototype.forEach.call(arr, (value) => {
+      expect(typeof value).toBe("number");
+    });
   });
 
   test("oneOf: object vs array competition with nested arrays and coercion", () => {
@@ -1139,12 +1204,12 @@ describe("stress scenarios", () => {
     // Invariants:
     expect(out).toHaveProperty("id");
     expect(out).toHaveProperty("location");
-    expect((out as any).unknownTopLevel).toEqual({ deeply: ["kept"] });
+    expect(out.unknownTopLevel).toEqual({ deeply: ["kept"] });
 
     // Location should prefer Coordinates given lat/lng
-    expect((out.location as any).lat).toBeCloseTo(51.5);
-    expect((out.location as any).lng).toBeCloseTo(-0.12);
-    expect((out.location as any).extra).toBe("keep");
+    expect(out.location.lat).toBeCloseTo(51.5);
+    expect(out.location.lng).toBeCloseTo(-0.12);
+    expect(out.location.extra).toBe("keep");
 
     // flags => booleans
     expect(Array.isArray(out.flags)).toBe(true);
@@ -1385,20 +1450,104 @@ describe("security issues", () => {
   });
 });
 
+describe("primitive coercion scoring", () => {
+  test("number schema scores higher for parseable string input", () => {
+    const NumSchema = number();
+    const StrSchema = string();
+    const schema = union(NumSchema, StrSchema);
+
+    // "42" is a parseable number string, but string is also a match
+    // String should win since it's an exact type match
+    const result = parseWithMeta(schema, "42");
+    expect(result.meta.chosenIndex).toBe(1); // string wins on type match
+  });
+
+  test("boolean schema scores higher for boolean-like values", () => {
+    const BoolSchema = boolean();
+    const StrSchema = string();
+    const schema = union(BoolSchema, StrSchema);
+
+    // "true" can be coerced to boolean but string is also a match
+    const result = parseWithMeta(schema, "true");
+    expect(result.meta.chosenIndex).toBe(1); // string wins on type match
+  });
+
+  test("number schema gets bonus for parseable string when competing with object", () => {
+    const NumSchema = number();
+    const ObjSchema = object({ value: string() });
+    const schema = union(NumSchema, ObjSchema);
+
+    const result = parseWithMeta(schema, "42");
+    expect(result.meta.chosenIndex).toBe(0); // number wins for parseable string
+  });
+
+  test("boolean schema gets bonus for boolean-like strings when competing with object", () => {
+    const BoolSchema = boolean();
+    const ObjSchema = object({ value: string() });
+    const schema = union(BoolSchema, ObjSchema);
+
+    const result = parseWithMeta(schema, "true");
+    expect(result.meta.chosenIndex).toBe(0); // boolean wins for "true"
+
+    const result2 = parseWithMeta(schema, "false");
+    expect(result2.meta.chosenIndex).toBe(0); // boolean wins for "false"
+
+    const result3 = parseWithMeta(schema, 0);
+    expect(result3.meta.chosenIndex).toBe(0); // boolean wins for 0
+
+    const result4 = parseWithMeta(schema, 1);
+    expect(result4.meta.chosenIndex).toBe(0); // boolean wins for 1
+  });
+});
+
+describe("parseWithMeta with non-union schemas", () => {
+  test("returns meta with chosenIndex 0 for string schema", () => {
+    const schema = string();
+    const result = parseWithMeta(schema, "hello");
+    expect(result.value).toBe("hello");
+    expect(result.meta.chosenIndex).toBe(0);
+    expect(result.meta.candidates).toEqual([]);
+  });
+
+  test("returns meta with chosenIndex 0 for number schema", () => {
+    const schema = number();
+    const result = parseWithMeta(schema, 42);
+    expect(result.value).toBe(42);
+    expect(result.meta.chosenIndex).toBe(0);
+    expect(result.meta.candidates).toEqual([]);
+  });
+
+  test("returns meta with chosenIndex 0 for object schema", () => {
+    const schema = object({ name: string() });
+    const result = parseWithMeta(schema, { name: "test" });
+    expect(result.value).toEqual({ name: "test" });
+    expect(result.meta.chosenIndex).toBe(0);
+    expect(result.meta.candidates).toEqual([]);
+  });
+
+  test("returns meta with chosenIndex 0 for array schema", () => {
+    const schema = array(number());
+    const result = parseWithMeta(schema, [1, 2, 3]);
+    expect(result.value).toEqual([1, 2, 3]);
+    expect(result.meta.chosenIndex).toBe(0);
+    expect(result.meta.candidates).toEqual([]);
+  });
+});
+
 describe("robustness issues", () => {
   test("union with no arguments should not crash", () => {
-    const schema = (union as any)();
+    const schema = union();
     expect(() => parse(schema, "anything")).not.toThrow();
   });
 
   test("union with no arguments should return undefined", () => {
-    const schema = (union as any)();
+    const schema = union();
     const result = parse(schema, "anything");
     expect(result).toBeUndefined();
   });
 
   test("parseWithMeta with empty union should not crash", () => {
-    const schema = (union as any)();
+    const schema = union();
     expect(() => parseWithMeta(schema, "anything")).not.toThrow();
   });
 
@@ -1423,6 +1572,34 @@ describe("robustness issues", () => {
     const schema = union(DeepA, DeepB);
 
     expect(() => parse(schema, createDeepValue(50))).not.toThrow();
+  });
+
+  test("literal type mismatch in union scoring penalizes wrong type", () => {
+    const StringKind = object(
+      { kind: literal("str"), value: string() },
+      "StringKind"
+    );
+    const NumberKind = object(
+      { kind: literal(42), value: number() },
+      "NumberKind"
+    );
+    const schema = union(StringKind, NumberKind);
+
+    // Passing string to number literal should be penalized
+    const result = parseWithMeta(schema, { kind: "hello", value: 123 });
+    expect(result.meta.chosenName).toBe("StringKind");
+  });
+
+  test("boolean property type matching in nested objects", () => {
+    const WithBool = object({ active: boolean(), name: string() }, "WithBool");
+    const WithString = object(
+      { active: string(), name: string() },
+      "WithString"
+    );
+    const schema = union(WithBool, WithString);
+
+    const result = parseWithMeta(schema, { active: true, name: "test" });
+    expect(result.meta.chosenName).toBe("WithBool");
   });
 
   test("early exit should not cause false positive when score accumulates past threshold", () => {
