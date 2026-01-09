@@ -260,14 +260,14 @@ describe("literal schema", () => {
     expect(b).toBe(false);
   });
 
-  test("string literal returns expected for non-coercible types", () => {
+  test("string literal coerces objects and arrays like string()", () => {
     const schema = literal("hello");
-    expect(parse(schema, {})).toBe("hello");
-    expect(parse(schema, [])).toBe("hello");
-    expect(parse(schema, Symbol("test"))).toBe("hello");
+    expect(parse(schema, {})).toBe("{}");
+    expect(parse(schema, [])).toBe("[]");
+    expect(parse(schema, Symbol("test"))).toBe("Symbol(test)");
   });
 
-  test("number literal returns expected for unparseable string", () => {
+  test("number literal defaults to literal value for unparseable string", () => {
     const schema = literal(42);
     expect(parse(schema, "not a number")).toBe(42);
   });
@@ -296,13 +296,6 @@ describe("literal schema", () => {
     expect(parse(schema, [])).toBe(true);
     expect(parse(schema, Symbol("test"))).toBe(true);
     expect(parse(schema, () => {})).toBe(true);
-  });
-
-  test("literal with non-primitive expected returns expected for any input", () => {
-    const schema = literal({ custom: "object" });
-    expect(parse(schema, "test")).toEqual({ custom: "object" });
-    expect(parse(schema, 42)).toEqual({ custom: "object" });
-    expect(parse(schema, true)).toEqual({ custom: "object" });
   });
 });
 

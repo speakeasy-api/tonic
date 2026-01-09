@@ -130,170 +130,101 @@ function createSchema<T>(
 }
 
 export function string(): Schema<string> {
-  return createSchema(
-    "string",
-    "",
-    (value: unknown, ctx?: ParseContext): string => {
-      const type = typeof value;
-      if (type === "string") return value as string;
+  const parse = (value: unknown, ctx?: ParseContext): string => {
+    const defaultVal = (parse as Schema<string>)._default;
+    const type = typeof value;
+    if (type === "string") return value as string;
 
-      if (value === undefined || value === null) {
-        diag(ctx, "default", { schema: "string", value: "" });
-        return "";
-      }
-
-      let result: string;
-      if (isPlainObject(value) || Array.isArray(value)) {
-        result = JSON.stringify(value);
-      } else {
-        result = String(value);
-      }
-
-      diag(ctx, "coercion", { from: type, to: "string" });
-      return result;
+    if (value === undefined || value === null) {
+      diag(ctx, "default", { schema: "string", value: defaultVal });
+      return defaultVal;
     }
-  );
+
+    let result: string;
+    if (isPlainObject(value) || Array.isArray(value)) {
+      result = JSON.stringify(value);
+    } else {
+      result = String(value);
+    }
+
+    diag(ctx, "coercion", { from: type, to: "string" });
+    return result;
+  };
+  return createSchema("string", "", parse);
 }
 
 export function number(): Schema<number> {
-  return createSchema(
-    "number",
-    0,
-    (value: unknown, ctx?: ParseContext): number => {
-      if (value === undefined || value === null) {
-        diag(ctx, "default", { schema: "number", value: 0 });
-        return 0;
-      }
+  const parse = (value: unknown, ctx?: ParseContext): number => {
+    const defaultVal = (parse as Schema<number>)._default;
 
-      const type = typeof value;
-      if (type === "number" && !Number.isNaN(value)) return value as number;
-
-      if (type === "string" || type === "boolean") {
-        const parsed = +value;
-        if (!Number.isNaN(parsed)) {
-          diag(ctx, "coercion", { from: type, to: "number" });
-          return parsed;
-        }
-        diag(ctx, "default", { schema: "number", value: 0 });
-        return 0;
-      }
-
-      diag(ctx, "coercion", { from: type, to: "number" });
-      return 0;
+    if (value === undefined || value === null) {
+      diag(ctx, "default", { schema: "number", value: defaultVal });
+      return defaultVal;
     }
-  );
+
+    const type = typeof value;
+    if (type === "number" && !Number.isNaN(value)) return value as number;
+
+    if (type === "string" || type === "boolean") {
+      const parsed = +value;
+      if (!Number.isNaN(parsed)) {
+        diag(ctx, "coercion", { from: type, to: "number" });
+        return parsed;
+      }
+      diag(ctx, "default", { schema: "number", value: defaultVal });
+      return defaultVal;
+    }
+
+    diag(ctx, "coercion", { from: type, to: "number" });
+    return defaultVal;
+  };
+  return createSchema("number", 0, parse);
 }
 
 export function boolean(): Schema<boolean> {
-  return createSchema(
-    "boolean",
-    false,
-    (value: unknown, ctx?: ParseContext): boolean => {
-      if (value === undefined || value === null) {
-        diag(ctx, "default", { schema: "boolean", value: false });
-        return false;
-      }
-      const type = typeof value;
-      if (type === "boolean") return value as boolean;
+  const parse = (value: unknown, ctx?: ParseContext): boolean => {
+    const defaultVal = (parse as Schema<boolean>)._default;
 
-      let result: boolean;
-      if (value === "false" || value === 0) result = false;
-      else result = Boolean(value);
-
-      diag(ctx, "coercion", { from: typeof value, to: "boolean" });
-      return result;
+    if (value === undefined || value === null) {
+      diag(ctx, "default", { schema: "boolean", value: defaultVal });
+      return defaultVal;
     }
-  );
+    const type = typeof value;
+    if (type === "boolean") return value as boolean;
+
+    let result: boolean;
+    if (value === "false" || value === 0) result = false;
+    else result = Boolean(value);
+
+    diag(ctx, "coercion", { from: typeof value, to: "boolean" });
+    return result;
+  };
+  return createSchema("boolean", false, parse);
 }
 
-type LiteralOutput<T> = T extends string
+type Primitive = string | number | boolean;
+
+type LiteralOutput<T extends Primitive> = T extends string
   ? T | (string & {})
   : T extends number
   ? T | (number & {})
-  : T extends boolean
-  ? T | (boolean & {})
-  : T;
+  : T | (boolean & {});
 
-export function literal<T>(
+export function literal<T extends Primitive>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
-  const defaultVal = expected as LiteralOutput<T>;
-
-  // Helper to coerce value to expected type
-  const coerceValue = (value: unknown): LiteralOutput<T> => {
-    if (typeof expected === "string") {
-      if (typeof value === "string") return value as LiteralOutput<T>;
-      if (typeof value === "number" || typeof value === "boolean") {
-        return String(value) as LiteralOutput<T>;
-      }
-      return expected as LiteralOutput<T>;
-    }
-
-    if (typeof expected === "number") {
-      if (typeof value === "number" && !Number.isNaN(value)) {
-        return value as LiteralOutput<T>;
-      }
-      if (typeof value === "string") {
-        const parsed = parseFloat(value);
-        if (!Number.isNaN(parsed)) return parsed as LiteralOutput<T>;
-      }
-      if (typeof value === "boolean") {
-        return (value ? 1 : 0) as LiteralOutput<T>;
-      }
-      return expected as LiteralOutput<T>;
-    }
-
-    if (typeof expected === "boolean") {
-      if (typeof value === "boolean") return value as LiteralOutput<T>;
-      if (value === "true" || value === 1) return true as LiteralOutput<T>;
-      if (value === "false" || value === 0) return false as LiteralOutput<T>;
-      if (typeof value === "string")
-        return (value.length > 0) as LiteralOutput<T>;
-      if (typeof value === "number") return (value !== 0) as LiteralOutput<T>;
-      return expected as LiteralOutput<T>;
-    }
-
-    return expected as LiteralOutput<T>;
-  };
-
-  const parse = (value: unknown, ctx?: ParseContext): LiteralOutput<T> => {
-    // Null/undefined -> literal default
-    if (value === undefined || value === null) {
-      diag(ctx, "literal_default", { expected, received: value });
-      return expected as LiteralOutput<T>;
-    }
-
-    // Exact match -> no diagnostic
-    if (value === expected) {
-      return expected as LiteralOutput<T>;
-    }
-
-    // Same type, different value -> literal_mismatch
-    if (typeof value === typeof expected) {
-      if (typeof expected === "number" && Number.isNaN(value as number)) {
-        diag(ctx, "literal_default", { expected, received: value });
-        return expected as LiteralOutput<T>;
-      }
-      diag(ctx, "literal_mismatch", { expected, received: value });
-      return value as LiteralOutput<T>;
-    }
-
-    // Different type -> try coercion
-    const result = coerceValue(value);
-    if (result === expected) {
-      diag(ctx, "literal_default", { expected, received: value });
-    } else {
-      diag(ctx, "literal_coercion", { expected, received: value });
-    }
-    return result;
-  };
-
-  const schema = createSchema("literal", defaultVal, parse) as Schema<
-    LiteralOutput<T>
-  > & { _literal: T };
-
+  const type = typeof expected;
+  let schema: Schema<LiteralOutput<T>> & { _literal: T };
+  if (type === "string")
+    schema = string() as Schema<LiteralOutput<T>> & { _literal: T };
+  else if (type === "number")
+    schema = number() as Schema<LiteralOutput<T>> & { _literal: T };
+  else if (type === "boolean")
+    schema = boolean() as Schema<LiteralOutput<T>> & { _literal: T };
+  else throw "unexpected";
+  schema._default = expected as LiteralOutput<T>;
   schema._literal = expected;
-  return schema;
+  return schema as Schema<LiteralOutput<T>> & { _literal: T };
 }
 
 type ObjectShape = Record<string, Schema>;
