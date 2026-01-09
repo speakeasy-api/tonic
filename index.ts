@@ -6,7 +6,6 @@ type DeepPrettify<T> = T extends (infer U)[]
   ? Prettify<{ [K in keyof T]: DeepPrettify<T[K]> }>
   : T;
 
-// Diagnostic types for parseWithDiagnostics
 export type DiagnosticKind =
   | "coercion"
   | "default"
@@ -46,7 +45,6 @@ export interface ArrayWrapDetails {
   valueType: string;
 }
 
-// Strongly typed details by kind
 export type DiagnosticDetailsByKind = {
   coercion: CoercionDetails;
   default: DefaultDetails;
@@ -60,7 +58,7 @@ export type DiagnosticDetailsByKind = {
 
 export interface Diagnostic<K extends DiagnosticKind = DiagnosticKind> {
   kind: K;
-  path: string;
+  path: (string | number)[];
   details?: DiagnosticDetailsByKind[K];
 }
 
@@ -69,7 +67,6 @@ export interface ParseResult<T> {
   diagnostics: Diagnostic[];
 }
 
-// Internal result returned by all schema parse functions
 interface InternalResult<T> {
   value: T;
   score: number;
@@ -78,53 +75,46 @@ interface InternalResult<T> {
   diagnostics: Diagnostic[];
 }
 
-// Scoring constants
-const SCORE = {
-  EXACT_TYPE: 100,
-  LITERAL_EXACT: 200,
-  LITERAL_TYPE: 100,
-  NULL_MATCH: 150,
-  ARRAY_MATCH: 80,
-  COERCIBLE_STRING: 1,
-  COERCIBLE_NUMBER: 5,
-  COERCIBLE_BOOLEAN: 5,
-  FIELD_PRESENT: 5,
-  FIELD_TYPE_MATCH: 2,
-  FIELD_MISSING: -10,
-  FIELD_COVERAGE: 1,
-  DISCRIMINATOR_EXACT: 50,
-  DISCRIMINATOR_TYPE: 5,
-  DISCRIMINATOR_MISMATCH: -50,
-  UNIQUE_FIELD: 10,
-} as const;
+const NO_DIAGNOSTICS: Diagnostic[] = [];
 
-function formatPath(segments: (string | number)[]): string {
-  if (segments.length === 0) return "";
-  return segments.reduce<string>((acc, segment, i) => {
-    if (typeof segment === "number") {
-      return `${acc}[${segment}]`;
-    }
-    return i === 0 ? segment : `${acc}.${segment}`;
-  }, "");
+function result<T>(
+  v: T,
+  s: number,
+  e: boolean,
+  t: boolean,
+  d: Diagnostic[]
+): InternalResult<T> {
+  return { value: v, score: s, exactMatch: e, typeMatch: t, diagnostics: d };
 }
 
-// Prepend path segment to all diagnostics
-function prependPath(
-  diagnostics: Diagnostic[],
-  segment: string | number
-): Diagnostic[] {
-  return diagnostics.map((d) => ({
-    ...d,
-    path: d.path ? `${formatPath([segment])}.${d.path}` : formatPath([segment]),
-  }));
+const S_EXACT_TYPE = 100;
+const S_LITERAL_EXACT = 200;
+const S_LITERAL_TYPE = 100;
+const S_NULL_MATCH = 150;
+const S_ARRAY_MATCH = 80;
+const S_COERCIBLE_STRING = 1;
+const S_COERCIBLE_NUMBER = 5;
+const S_COERCIBLE_BOOLEAN = 5;
+const S_FIELD_PRESENT = 5;
+const S_FIELD_TYPE_MATCH = 2;
+const S_FIELD_MISSING = -10;
+const S_FIELD_COVERAGE = 1;
+const S_DISCRIMINATOR_EXACT = 50;
+const S_DISCRIMINATOR_TYPE = 5;
+const S_DISCRIMINATOR_MISMATCH = -50;
+const S_UNIQUE_FIELD = 10;
+
+function prependPath(diagnostics: Diagnostic[], segment: string | number) {
+  for (let i = 0; i < diagnostics.length; i++)
+    diagnostics[i]!.path.unshift(segment);
 }
 
 function makeDiag<K extends DiagnosticKind>(
   kind: K,
-  path: string,
-  details?: DiagnosticDetailsByKind[K]
+  details: DiagnosticDetailsByKind[K],
+  path?: string | number
 ): Diagnostic<K> {
-  return { kind, path, details } as Diagnostic<K>;
+  return { kind, path: path ? [path] : [], details } as Diagnostic<K>;
 }
 
 export type Schema<T = unknown> = {
@@ -142,10 +132,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 type NonEmptyArray<T> = [T, ...T[]];
 
-function isNonEmptyArray<T>(value: T[]): value is NonEmptyArray<T> {
-  return value.length > 0;
-}
-
 function createSchema<T>(
   kind: string,
   defaultValue: T,
@@ -160,164 +146,78 @@ function createSchema<T>(
 
 export function string(): Schema<string> {
   const parse = (value: unknown): InternalResult<string> => {
-    const defaultVal = (parse as Schema<string>)._default;
-    const type = typeof value;
-
-    if (type === "string") {
-      return {
-        value: value as string,
-        score: SCORE.EXACT_TYPE,
-        exactMatch: false, // Type match, not exact discriminator match
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-
-    if (value === undefined || value === null) {
-      return {
-        value: defaultVal,
-        score: SCORE.COERCIBLE_STRING,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "string", value: defaultVal }),
-        ],
-      };
-    }
-
-    let result: string;
-    if (isPlainObject(value) || Array.isArray(value)) {
-      result = JSON.stringify(value);
-    } else {
-      result = String(value);
-    }
-
-    return {
-      value: result,
-      score: SCORE.COERCIBLE_STRING,
-      exactMatch: false,
-      typeMatch: false,
-      diagnostics: [makeDiag("coercion", "", { from: type, to: "string" })],
-    };
+    const d = (parse as Schema<string>)._default;
+    const t = typeof value;
+    if (t === "string")
+      return result(value as string, S_EXACT_TYPE, false, true, NO_DIAGNOSTICS);
+    if (value === undefined || value === null)
+      return result(d, S_COERCIBLE_STRING, false, false, [
+        makeDiag("default", { schema: "string", value: d }),
+      ]);
+    const r =
+      isPlainObject(value) || Array.isArray(value)
+        ? JSON.stringify(value)
+        : String(value);
+    return result(r, S_COERCIBLE_STRING, false, false, [
+      makeDiag("coercion", { from: t, to: "string" }),
+    ]);
   };
   return createSchema("string", "", parse);
 }
 
 export function number(): Schema<number> {
   const parse = (value: unknown): InternalResult<number> => {
-    const defaultVal = (parse as Schema<number>)._default;
-
-    if (value === undefined || value === null) {
-      return {
-        value: defaultVal,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "number", value: defaultVal }),
-        ],
-      };
+    const d = (parse as Schema<number>)._default;
+    if (value === undefined || value === null)
+      return result(d, 0, false, false, [
+        makeDiag("default", { schema: "number", value: d }),
+      ]);
+    const t = typeof value;
+    if (t === "number" && !Number.isNaN(value))
+      return result(value as number, S_EXACT_TYPE, false, true, NO_DIAGNOSTICS);
+    if (t === "string") {
+      const p = +value;
+      if (!Number.isNaN(p))
+        return result(p, S_COERCIBLE_NUMBER, false, false, [
+          makeDiag("coercion", { from: t, to: "number" }),
+        ]);
+      return result(d, 0, false, false, [
+        makeDiag("default", { schema: "number", value: d }),
+      ]);
     }
-
-    const type = typeof value;
-    if (type === "number" && !Number.isNaN(value)) {
-      return {
-        value: value as number,
-        score: SCORE.EXACT_TYPE,
-        exactMatch: false, // Type match, not exact discriminator match
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-
-    if (type === "string") {
-      const parsed = +value;
-      if (!Number.isNaN(parsed)) {
-        return {
-          value: parsed,
-          score: SCORE.COERCIBLE_NUMBER,
-          exactMatch: false,
-          typeMatch: false,
-          diagnostics: [makeDiag("coercion", "", { from: type, to: "number" })],
-        };
-      }
-      return {
-        value: defaultVal,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "number", value: defaultVal }),
-        ],
-      };
-    }
-
-    if (type === "boolean") {
-      const parsed = +value;
-      return {
-        value: parsed,
-        score: 0, // No bonus for boolean coercion - string should win
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [makeDiag("coercion", "", { from: type, to: "number" })],
-      };
-    }
-
-    return {
-      value: defaultVal,
-      score: 0,
-      exactMatch: false,
-      typeMatch: false,
-      diagnostics: [makeDiag("coercion", "", { from: type, to: "number" })],
-    };
+    if (t === "boolean")
+      return result(+value, 0, false, false, [
+        makeDiag("coercion", { from: t, to: "number" }),
+      ]);
+    return result(d, 0, false, false, [
+      makeDiag("coercion", { from: t, to: "number" }),
+    ]);
   };
   return createSchema("number", 0, parse);
 }
 
 export function boolean(): Schema<boolean> {
   const parse = (value: unknown): InternalResult<boolean> => {
-    const defaultVal = (parse as Schema<boolean>)._default;
-
-    if (value === undefined || value === null) {
-      return {
-        value: defaultVal,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "boolean", value: defaultVal }),
-        ],
-      };
-    }
-
-    const type = typeof value;
-    if (type === "boolean") {
-      return {
-        value: value as boolean,
-        score: SCORE.EXACT_TYPE,
-        exactMatch: false, // Type match, not exact discriminator match
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-
-    let result: boolean;
-    if (value === "false" || value === 0) result = false;
-    else result = Boolean(value);
-
-    // Higher score for boolean-like values
-    let score = SCORE.COERCIBLE_BOOLEAN;
-    if (value === "true" || value === "false" || value === 0 || value === 1) {
-      score = SCORE.COERCIBLE_BOOLEAN;
-    }
-
-    return {
-      value: result,
-      score,
-      exactMatch: false,
-      typeMatch: false,
-      diagnostics: [makeDiag("coercion", "", { from: type, to: "boolean" })],
-    };
+    const d = (parse as Schema<boolean>)._default;
+    if (value === undefined || value === null)
+      return result(d, 0, false, false, [
+        makeDiag("default", { schema: "boolean", value: d }),
+      ]);
+    const t = typeof value;
+    if (t === "boolean")
+      return result(
+        value as boolean,
+        S_EXACT_TYPE,
+        false,
+        true,
+        NO_DIAGNOSTICS
+      );
+    let r: boolean;
+    if (value === "false" || value === 0) r = false;
+    else r = Boolean(value);
+    return result(r, S_COERCIBLE_BOOLEAN, false, false, [
+      makeDiag("coercion", { from: t, to: "boolean" }),
+    ]);
   };
   return createSchema("boolean", false, parse);
 }
@@ -333,78 +233,44 @@ type LiteralOutput<T extends Primitive> = T extends string
 export function literal<T extends Primitive>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
-  const type = typeof expected;
-  let baseSchema: Schema<LiteralOutput<T>>;
-
-  if (type === "string") {
-    baseSchema = string() as Schema<LiteralOutput<T>>;
-  } else if (type === "number") {
-    baseSchema = number() as Schema<LiteralOutput<T>>;
-  } else if (type === "boolean") {
-    baseSchema = boolean() as Schema<LiteralOutput<T>>;
-  } else {
-    throw "unexpected";
-  }
-
-  const parse = (value: unknown): InternalResult<LiteralOutput<T>> => {
-    // For undefined/null, return the literal's expected value as default
-    if (value === undefined || value === null) {
-      return {
-        value: expected as LiteralOutput<T>,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "literal", value: expected }),
-        ],
-      };
-    }
-
-    // Exact literal match
-    if (value === expected) {
-      return {
-        value: expected as LiteralOutput<T>,
-        score: SCORE.LITERAL_EXACT,
-        exactMatch: true,
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-
-    // Type matches but value doesn't (open enum behavior)
-    if (typeof value === typeof expected) {
-      return {
-        value: value as LiteralOutput<T>,
-        score: SCORE.LITERAL_TYPE,
-        exactMatch: false,
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-
-    // Need coercion - parse through base schema
-    const baseResult = baseSchema(value);
-
-    // If base schema returns default (coercion failed), use literal's expected value instead
-    if (baseResult.diagnostics.some((d) => d.kind === "default")) {
-      return {
-        value: expected as LiteralOutput<T>,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("default", "", { schema: "literal", value: expected }),
-        ],
-      };
-    }
-
-    return baseResult;
-  };
+  const t = typeof expected;
+  let base: Schema<LiteralOutput<T>>;
+  if (t === "string") base = string() as Schema<LiteralOutput<T>>;
+  else if (t === "number") base = number() as Schema<LiteralOutput<T>>;
+  else if (t === "boolean") base = boolean() as Schema<LiteralOutput<T>>;
+  else throw Error("literal(): unexpected primitive type");
 
   const schema = createSchema(
     "literal",
     expected as LiteralOutput<T>,
-    parse
+    (value): InternalResult<LiteralOutput<T>> => {
+      if (value === undefined || value === null)
+        return result(expected as LiteralOutput<T>, 0, false, false, [
+          makeDiag("default", { schema: "literal", value: expected }),
+        ]);
+      if (value === expected)
+        return result(
+          expected as LiteralOutput<T>,
+          S_LITERAL_EXACT,
+          true,
+          true,
+          NO_DIAGNOSTICS
+        );
+      if (typeof value === typeof expected)
+        return result(
+          value as LiteralOutput<T>,
+          S_LITERAL_TYPE,
+          false,
+          true,
+          NO_DIAGNOSTICS
+        );
+      const b = base(value);
+      if (b.diagnostics.some((d) => d.kind === "default"))
+        return result(expected as LiteralOutput<T>, 0, false, false, [
+          makeDiag("default", { schema: "literal", value: expected }),
+        ]);
+      return b;
+    }
   ) as Schema<LiteralOutput<T>> & { _literal: T };
   schema._literal = expected;
   return schema;
@@ -425,17 +291,6 @@ interface NullableSchema<T = unknown> extends Schema<T | null> {
   _nullable: true;
 }
 
-// Helper to get the input key for a schema (handles _from alias)
-function getInputKey(propSchema: Schema, schemaKey: string): string {
-  if (
-    "_from" in propSchema &&
-    typeof (propSchema as { _from?: string })._from === "string"
-  ) {
-    return (propSchema as { _from: string })._from;
-  }
-  return schemaKey;
-}
-
 export function object<T extends ObjectShape>(
   shape: T,
   name?: string
@@ -450,16 +305,17 @@ export function object<T extends ObjectShape>(
   }
 
   const parse = (value: unknown): InternalResult<InferObject<T>> => {
+    // Cache isPlainObject result
+    const isObj = isPlainObject(value);
     const {
       __proto__: _,
       prototype: __,
       constructor: ___,
       ...input
-    } = isPlainObject(value) ? value : {};
+    } = isObj ? value : {};
 
     let totalScore = 0;
-    let hasTypeMatch = isPlainObject(value);
-    let hasExactDiscriminator = false; // Track if ANY field has exact discriminator match
+    let hasExactDiscriminator = false;
     const diagnostics: Diagnostic[] = [];
 
     // Process each field in the shape
@@ -467,31 +323,34 @@ export function object<T extends ObjectShape>(
       const propSchema = shape[key]!;
 
       // Check for field alias (_from)
-      const fromKey = getInputKey(propSchema, key);
+      const fromKey = (propSchema as { _from?: string })._from || key;
       const propValue = input[fromKey];
 
       // Delete the alias key if different from schema key
       if (fromKey !== key && fromKey in input) {
-        diagnostics.push(makeDiag("field_alias", key, { from: fromKey }));
+        diagnostics.push(makeDiag("field_alias", { from: fromKey }, key));
         delete input[fromKey];
       }
 
       if ("_optional" in propSchema && propValue === undefined) {
         delete input[key];
-        // Optional field missing doesn't affect score negatively
       } else {
-        // Check if field is present in input
-        const fieldPresent = fromKey in (isPlainObject(value) ? value : {});
+        // Check if field is present in input (use cached isObj)
+        const fieldPresent = isObj && fromKey in value;
 
         if (fieldPresent) {
-          totalScore += SCORE.FIELD_PRESENT;
+          totalScore += S_FIELD_PRESENT;
         } else if (!("_optional" in propSchema)) {
-          totalScore += SCORE.FIELD_MISSING;
+          totalScore += S_FIELD_MISSING;
           diagnostics.push(
-            makeDiag("default", key, {
-              schema: propSchema._kind,
-              value: propSchema._default,
-            })
+            makeDiag(
+              "default",
+              {
+                schema: propSchema._kind,
+                value: propSchema._default,
+              },
+              key
+            )
           );
         }
 
@@ -501,11 +360,10 @@ export function object<T extends ObjectShape>(
 
         // Add field type match bonus
         if (fieldResult.typeMatch && fieldPresent) {
-          totalScore += SCORE.FIELD_TYPE_MATCH;
+          totalScore += S_FIELD_TYPE_MATCH;
         }
 
         // Only accumulate nested scores when field was present in input
-        // (don't penalize deeply for defaulted nested structures)
         if (
           fieldPresent &&
           (propSchema._kind === "object" || propSchema._kind === "array")
@@ -517,34 +375,30 @@ export function object<T extends ObjectShape>(
         if ("_literal" in propSchema) {
           const literalSchema = propSchema as Schema & { _literal: Primitive };
           if (propValue === literalSchema._literal) {
-            totalScore += SCORE.DISCRIMINATOR_EXACT;
-            hasExactDiscriminator = true; // Found exact discriminator match
+            totalScore += S_DISCRIMINATOR_EXACT;
+            hasExactDiscriminator = true;
           } else if (typeof propValue === typeof literalSchema._literal) {
-            totalScore += SCORE.DISCRIMINATOR_TYPE;
+            totalScore += S_DISCRIMINATOR_TYPE;
           } else if (fieldPresent) {
-            totalScore += SCORE.DISCRIMINATOR_MISMATCH;
+            totalScore += S_DISCRIMINATOR_MISMATCH;
           }
         }
 
-        // Prepend path to nested diagnostics
-        diagnostics.push(...prependPath(fieldResult.diagnostics, key));
+        // Append nested diagnostics
+        prependPath(fieldResult.diagnostics, key);
+        for (let j = 0; j < fieldResult.diagnostics.length; j++)
+          diagnostics.push(fieldResult.diagnostics[j]!);
       }
     }
 
-    // Field coverage bonus
-    for (const key in input) {
-      if (key in shape) {
-        totalScore += SCORE.FIELD_COVERAGE;
-      }
-    }
-
-    return {
-      value: input as InferObject<T>,
-      score: totalScore,
-      exactMatch: hasExactDiscriminator && hasTypeMatch, // Exact match only with discriminator
-      typeMatch: hasTypeMatch,
-      diagnostics,
-    };
+    for (const key in input) if (key in shape) totalScore += S_FIELD_COVERAGE;
+    return result(
+      input as InferObject<T>,
+      totalScore,
+      hasExactDiscriminator && isObj,
+      isObj,
+      diagnostics
+    );
   };
 
   const schema = createSchema("object", defaultVal, parse) as Schema<
@@ -559,111 +413,57 @@ export function object<T extends ObjectShape>(
 export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
   const parse = (value: unknown): InternalResult<Infer<T>[]> => {
     if (!Array.isArray(value)) {
-      if (value === undefined || value === null) {
-        return {
-          value: [],
-          score: 0,
-          exactMatch: false,
-          typeMatch: false,
-          diagnostics: [
-            makeDiag("default", "", { schema: "array", value: [] }),
-          ],
-        };
-      }
-
-      // Wrap single value in array
-      const elemResult = element(value);
-      return {
-        value: [elemResult.value as Infer<T>],
-        score: elemResult.score,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [
-          makeDiag("array_wrap", "", { valueType: typeof value }),
-          ...prependPath(elemResult.diagnostics, 0),
-        ],
-      };
+      if (value === undefined || value === null)
+        return result([], 0, false, false, [
+          makeDiag("default", { schema: "array", value: [] }),
+        ]);
+      const e = element(value);
+      prependPath(e.diagnostics, 0);
+      const d: Diagnostic[] = [
+        makeDiag("array_wrap", { valueType: typeof value }),
+      ];
+      for (let j = 0; j < e.diagnostics.length; j++) d.push(e.diagnostics[j]!);
+      return result([e.value as Infer<T>], e.score, false, false, d);
     }
-
-    let totalScore = SCORE.ARRAY_MATCH;
-    let allExact = true;
-    const diagnostics: Diagnostic[] = [];
-
-    const result = value.map((v, i) => {
-      const elemResult = element(v);
-      totalScore += elemResult.score;
-      if (!elemResult.exactMatch) allExact = false;
-      diagnostics.push(...prependPath(elemResult.diagnostics, i));
-      return elemResult.value as Infer<T>;
+    let s = S_ARRAY_MATCH,
+      x = true;
+    const d: Diagnostic[] = [];
+    const r = value.map((v, i) => {
+      const e = element(v);
+      s += e.score;
+      if (!e.exactMatch) x = false;
+      prependPath(e.diagnostics, i);
+      for (let j = 0; j < e.diagnostics.length; j++) d.push(e.diagnostics[j]!);
+      return e.value as Infer<T>;
     });
-
-    return {
-      value: result,
-      score: totalScore,
-      exactMatch: allExact,
-      typeMatch: true,
-      diagnostics,
-    };
+    return result(r, s, x, true, d);
   };
-
   return createSchema("array", [] as Infer<T>[], parse);
 }
 
 export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
   const parse = (value: unknown): InternalResult<Infer<T> | undefined> => {
-    if (value === undefined) {
-      return {
-        value: undefined,
-        score: SCORE.EXACT_TYPE,
-        exactMatch: false, // Not a discriminator match
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-    const innerResult = inner(value);
-    return {
-      value: innerResult.value as Infer<T>,
-      score: innerResult.score,
-      exactMatch: innerResult.exactMatch,
-      typeMatch: innerResult.typeMatch,
-      diagnostics: innerResult.diagnostics,
-    };
+    if (value === undefined)
+      return result(undefined, S_EXACT_TYPE, false, true, NO_DIAGNOSTICS);
+    return inner(value) as InternalResult<Infer<T> | undefined>;
   };
-
   const schema = createSchema("optional", undefined, parse) as OptionalSchema<
     Infer<T>
   >;
   schema._optional = true;
-  (schema as unknown as { _inner: T })._inner = inner;
   return schema;
 }
 
 export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
   const parse = (value: unknown): InternalResult<Infer<T> | null> => {
-    if (value === null || value === undefined) {
-      return {
-        value: null,
-        score: SCORE.NULL_MATCH,
-        exactMatch: value === null,
-        typeMatch: true,
-        diagnostics: [],
-      };
-    }
-    const innerResult = inner(value);
-    return {
-      value: innerResult.value as Infer<T>,
-      score: innerResult.score,
-      exactMatch: innerResult.exactMatch,
-      typeMatch: innerResult.typeMatch,
-      diagnostics: innerResult.diagnostics,
-    };
+    if (value === null || value === undefined)
+      return result(null, S_NULL_MATCH, value === null, true, NO_DIAGNOSTICS);
+    return inner(value) as InternalResult<Infer<T> | null>;
   };
-
   const schema = createSchema("nullable", null, parse) as NullableSchema<
     Infer<T>
   >;
   schema._nullable = true;
-  (schema as unknown as { _inner: T })._inner = inner;
   return schema;
 }
 
@@ -678,31 +478,8 @@ export function field<T extends Schema>(
   inner: T,
   options?: { from?: string }
 ): FieldReturn<T> {
-  const parse = (value: unknown): InternalResult<Infer<T>> => {
-    return inner(value) as InternalResult<Infer<T>>;
-  };
-
-  const schema = createSchema(
-    inner._kind,
-    inner._default,
-    parse
-  ) as FieldReturn<T>;
-
-  // Copy over properties from inner schema
-  if ("_optional" in inner) {
-    (schema as { _optional?: true })._optional = true;
-  }
-  if ("_literal" in inner) {
-    (schema as { _literal?: Primitive })._literal = (
-      inner as { _literal: Primitive }
-    )._literal;
-  }
-
-  if (options?.from) {
-    schema._from = options.from;
-  }
-
-  return schema;
+  if (options?.from) (inner as FieldSchema<T>)._from = options.from;
+  return inner as unknown as FieldReturn<T>;
 }
 
 // Compute unique field counts for union discrimination
@@ -723,98 +500,57 @@ function computeKeyCounts(schemas: Schema[]): Record<string, number> {
 export function union<T extends NonEmptyArray<Schema>>(
   ...schemas: T
 ): Schema<Infer<T[number]>> & { _schemas: T } {
-  if (!isNonEmptyArray(schemas)) {
-    const schema = createSchema("union", undefined as Infer<T[number]>, () => {
-      return {
-        value: undefined as Infer<T[number]>,
-        score: 0,
-        exactMatch: false,
-        typeMatch: false,
-        diagnostics: [],
-      };
-    }) as Schema<Infer<T[number]>> & { _schemas: T };
-    schema._schemas = schemas;
-    return schema;
-  }
-
+  if (!schemas.length)
+    return createSchema("union", undefined, () =>
+      result(undefined, 0, false, false, NO_DIAGNOSTICS)
+    ) as Schema<Infer<T[number]>> & { _schemas: T };
   const keyCounts = computeKeyCounts(schemas);
   const defaultVal = schemas[0]!._default as Infer<T[number]>;
 
   const parse = (value: unknown): InternalResult<Infer<T[number]>> => {
-    let bestResult: InternalResult<Infer<T[number]>> | undefined;
-    let bestIndex = 0;
-    let bestName: string | undefined;
-
+    let best: InternalResult<Infer<T[number]>> | undefined,
+      idx = 0,
+      name: string | undefined;
     for (let i = 0; i < schemas.length; i++) {
-      const schema = schemas[i]!;
-      const result = schema(value) as InternalResult<Infer<T[number]>>;
-
-      // Add unique field bonus for objects
-      if (schema._kind === "object" && isPlainObject(value)) {
-        const objSchema = schema as Schema & {
-          _shape: ObjectShape;
-          _name?: string;
-        };
-        for (const key in value) {
-          if (key in objSchema._shape && keyCounts[key] === 1) {
-            result.score += SCORE.UNIQUE_FIELD;
-          }
-        }
+      const s = schemas[i]!,
+        r = s(value) as InternalResult<Infer<T[number]>>;
+      if (s._kind === "object" && isPlainObject(value)) {
+        const o = s as Schema & { _shape: ObjectShape; _name?: string };
+        for (const k in value)
+          if (k in o._shape && keyCounts[k] === 1) r.score += S_UNIQUE_FIELD;
       }
-
-      const shouldReplace =
-        !bestResult ||
-        (result.exactMatch && !bestResult.exactMatch) ||
-        (!bestResult.exactMatch && result.score > bestResult.score);
-
-      if (shouldReplace) {
-        bestResult = result;
-        bestIndex = i;
-        if (schema._kind === "object") {
-          bestName = (schema as Schema & { _name?: string })._name;
-        }
+      if (
+        !best ||
+        (r.exactMatch && !best.exactMatch) ||
+        (!best.exactMatch && r.score > best.score)
+      ) {
+        best = r;
+        idx = i;
+        if (s._kind === "object")
+          name = (s as Schema & { _name?: string })._name;
       }
-
-      // Early exit on exact match
-      if (result.exactMatch) {
-        break;
-      }
+      if (r.exactMatch) break;
     }
-
-    if (!bestResult) {
-      bestResult = schemas[0]!(value) as InternalResult<Infer<T[number]>>;
-    }
-
-    // Determine selection reason
+    if (!best) best = schemas[0]!(value) as InternalResult<Infer<T[number]>>;
     let reason: "exact match" | "type match" | "best score";
-    if (bestResult.exactMatch) {
-      reason = "exact match";
-    } else if (bestResult.typeMatch) {
-      reason = "type match";
-    } else {
-      reason = "best score";
-    }
-
-    // Add union selection diagnostic
-    const unionDiag = makeDiag("union_selection", "", {
-      chosenIndex: bestIndex,
-      chosenName: bestName,
-      reason,
-    });
-
-    return {
-      value: bestResult.value,
-      score: bestResult.score,
-      exactMatch: bestResult.exactMatch,
-      typeMatch: bestResult.typeMatch,
-      diagnostics: [unionDiag, ...bestResult.diagnostics],
-    };
+    if (best.exactMatch) reason = "exact match";
+    else if (best.typeMatch) reason = "type match";
+    else reason = "best score";
+    const d: Diagnostic[] = [
+      makeDiag("union_selection", {
+        chosenIndex: idx,
+        chosenName: name,
+        reason,
+      }),
+    ];
+    for (let j = 0; j < best.diagnostics.length; j++)
+      d.push(best.diagnostics[j]!);
+    return result(best.value, best.score, best.exactMatch, best.typeMatch, d);
   };
 
   const schema = createSchema("union", defaultVal, parse) as Schema<
     Infer<T[number]>
   > & { _schemas: T };
-
   schema._schemas = schemas;
   return schema;
 }
