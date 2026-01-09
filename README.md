@@ -19,7 +19,7 @@
     <!-- Used in Speakeasy's <a href="https://www.speakeasy.com/product/sdk-generation">generated SDKs</a> to gracefully handle API response changes. -->
   </p>
   <p align="center">
-    <a href="https://www.npmjs.com/package/@speakeasy/tonic"><img alt="npm" src="https://img.shields.io/npm/v/@speakeasy/tonic.svg?style=for-the-badge&logo=npm"></a>
+    <a href="https://www.npmjs.com/package/@speakeasy-api/tonic"><img alt="npm" src="https://img.shields.io/npm/v/@speakeasy-api/tonic.svg?style=for-the-badge&logo=npm"></a>
     <a href="https://www.typescriptlang.org/"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white"></a>
     <a href="#features"><img alt="Bundle Size" src="https://img.shields.io/badge/gzip-<2.5kb-brightgreen.svg?style=for-the-badge"></a>
     <br/>
@@ -31,7 +31,7 @@
 </p>
 
 ```bash
-npm i @speakeasy/tonic
+npm i @speakeasy-api/tonic
 ```
 
 ## Features
@@ -60,7 +60,7 @@ When Zod encounters any of these, it throws. Your application crashes. Users see
 Tonic coerces input to match your schema. It always produces a valid output—no exceptions. Unknown fields pass through. Missing fields get defaults. Type mismatches get converted when possible.
 
 ```typescript
-import { object, string, number, parse } from "@speakeasy/tonic";
+import { object, string, number, parse } from "@speakeasy-api/tonic";
 
 const User = object({
   id: number(),

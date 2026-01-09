@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@speakeasy/tonic",
+      "name": "@speakeasy-api/tonic",
       "devDependencies": {
         "@size-limit/file": "^12.0.0",
         "@types/bun": "latest",
