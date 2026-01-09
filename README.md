@@ -1,6 +1,34 @@
-# tonic
+<div align="center">
+  <a href="https://www.speakeasy.com/" target="_blank">
+    <img width="1500" height="500" alt="Speakeasy" src="https://github.com/user-attachments/assets/0e56055b-02a3-4476-9130-4be299e5a39c" />
+  </a>
+  <br />
+  <br />
+  <a href="https://speakeasy.com/docs/create-client-sdks/" target="_blank"><b>Docs</b></a>&nbsp;&nbsp;//&nbsp;&nbsp;<a href="https://go.speakeasy.com/slack" target="_blank"><b>Join us on Slack</b></a>
+  <br />
+  <br />
+</div>
 
-A coercing schema library for forward-compatible API consumption.
+<hr />
+
+<p align="center">
+  <img src="logo.svg" alt="tonic" width="128" height="128" />
+  <h1 align="center"><b>tonic</b></h1>
+  <p align="center">
+    A coercing schema library for forward-compatible API consumption.<br />
+    <!-- Used in Speakeasy's <a href="https://www.speakeasy.com/product/sdk-generation">generated SDKs</a> to gracefully handle API response changes. -->
+  </p>
+  <p align="center">
+    <a href="https://www.npmjs.com/package/@speakeasy/tonic"><img alt="npm" src="https://img.shields.io/npm/v/@speakeasy/tonic.svg?style=for-the-badge&logo=npm"></a>
+    <a href="https://www.typescriptlang.org/"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white"></a>
+    <a href="#features"><img alt="Bundle Size" src="https://img.shields.io/badge/gzip-<2.5kb-brightgreen.svg?style=for-the-badge"></a>
+    <br/>
+    <a href="#features"><img alt="Zero Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen.svg?style=for-the-badge"></a>
+    <a href="/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge"></a>
+    <br/>
+    <a href="https://speakeasy.com/"><img alt="Built by Speakeasy" src="https://www.speakeasy.com/assets/badges/built-by-speakeasy.svg" /></a>
+  </p>
+</p>
 
 ```bash
 npm i @speakeasy/tonic
