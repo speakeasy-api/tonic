@@ -348,7 +348,7 @@ union(schemaA, schemaB, ...)  // scored discrimination
 
 ```typescript
 parse(schema, value); // returns coerced value
-parseWithMeta(schema, value); // returns { value, meta } with discrimination details
+parseWithDiagnostics(schema, value); // returns { value, diagnostics }
 ```
 
 ## Union discrimination logic
@@ -383,11 +383,15 @@ parse(Schema, { inner: { bar: "hello" } });
 ### Inspecting discrimination
 
 ```typescript
-const { value, meta } = parseWithMeta(Event, input);
+const { value, diagnostics } = parseWithDiagnostics(Event, input);
 
-meta.chosenIndex; // index of winning schema
-meta.chosenName; // name if object schema had one
-meta.candidates; // all candidates with scores
+// Find the union_selection diagnostic
+const selection = diagnostics.find((d) => d.kind === "union_selection");
+if (selection) {
+  selection.details.chosenIndex; // index of winning schema
+  selection.details.chosenName; // name if object schema had one
+  selection.details.reason; // "exact match" | "type match" | "best score"
+}
 ```
 
 ## Design principles
