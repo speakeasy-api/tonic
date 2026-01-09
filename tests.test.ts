@@ -823,8 +823,8 @@ describe("edge cases", () => {
 
   test("schema is callable directly", () => {
     const schema = string();
-    expect(schema(123)).toBe("123");
-    expect(schema("hello")).toBe("hello");
+    expect(schema(123).value).toBe("123");
+    expect(schema("hello").value).toBe("hello");
   });
 });
 
@@ -1549,17 +1549,20 @@ describe("parseWithDiagnostics with non-union schemas", () => {
 
 describe("robustness issues", () => {
   test("union with no arguments should not crash", () => {
+    // @ts-expect-error
     const schema = union();
     expect(() => parse(schema, "anything")).not.toThrow();
   });
 
   test("union with no arguments should return undefined", () => {
+    // @ts-expect-error
     const schema = union();
     const result = parse(schema, "anything");
     expect(result).toBeUndefined();
   });
 
   test("parseWithDiagnostics with empty union should not crash", () => {
+    // @ts-expect-error
     const schema = union();
     expect(() => parseWithDiagnostics(schema, "anything")).not.toThrow();
   });
