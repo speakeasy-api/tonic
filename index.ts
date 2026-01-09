@@ -56,11 +56,39 @@ export type DiagnosticDetailsByKind = {
   array_wrap: ArrayWrapDetails;
 };
 
-export interface Diagnostic<K extends DiagnosticKind = DiagnosticKind> {
-  kind: K;
-  path: (string | number)[];
-  details?: DiagnosticDetailsByKind[K];
-}
+export type Diagnostic =
+  | { kind: "coercion"; path: (string | number)[]; details: CoercionDetails }
+  | { kind: "default"; path: (string | number)[]; details: DefaultDetails }
+  | {
+      kind: "literal_mismatch";
+      path: (string | number)[];
+      details: LiteralDetails;
+    }
+  | {
+      kind: "literal_coercion";
+      path: (string | number)[];
+      details: LiteralDetails;
+    }
+  | {
+      kind: "literal_default";
+      path: (string | number)[];
+      details: LiteralDetails;
+    }
+  | {
+      kind: "union_selection";
+      path: (string | number)[];
+      details: UnionSelectionDetails;
+    }
+  | {
+      kind: "field_alias";
+      path: (string | number)[];
+      details: FieldAliasDetails;
+    }
+  | {
+      kind: "array_wrap";
+      path: (string | number)[];
+      details: ArrayWrapDetails;
+    };
 
 export interface ParseResult<T> {
   value: T;
@@ -113,8 +141,8 @@ function makeDiag<K extends DiagnosticKind>(
   kind: K,
   details: DiagnosticDetailsByKind[K],
   path?: string | number
-): Diagnostic<K> {
-  return { kind, path: path ? [path] : [], details } as Diagnostic<K>;
+): Diagnostic {
+  return { kind, path: path ? [path] : [], details } as Diagnostic;
 }
 
 export type Schema<T = unknown> = {
@@ -342,16 +370,6 @@ export function object<T extends ObjectShape>(
           totalScore += S_FIELD_PRESENT;
         } else if (!("_optional" in propSchema)) {
           totalScore += S_FIELD_MISSING;
-          diagnostics.push(
-            makeDiag(
-              "default",
-              {
-                schema: propSchema._kind,
-                value: propSchema._default,
-              },
-              key
-            )
-          );
         }
 
         // Parse the field

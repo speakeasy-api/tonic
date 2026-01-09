@@ -68,6 +68,34 @@ const response = await fetch("/api/items").then((r) => r.json());
 const { data, cursor } = parse(ApiResponse, response);
 ```
 
+### Detecting API response mismatches
+
+Use `parseWithDiagnostics` to detect when the API returns data that doesn't match your expectations. This is useful for logging warnings without breaking your app:
+
+```typescript
+const UserResponse = object({
+  id: number(),
+  name: string(),
+  email: string(),
+  role: literal("admin"),
+});
+
+const response = await fetch("/api/user/123").then((r) => r.json());
+const { value, diagnostics } = parseWithDiagnostics(UserResponse, response);
+
+// Log warnings for any mismatches
+for (const diagnostic of diagnostics) {
+  const path = diagnostic.path.join(".");
+  if (diagnostic.kind === "default") {
+    console.warn(`Missing field "${path}": using default value`);
+  } else if (diagnostic.kind === "coercion") {
+    console.warn(
+      `Type mismatch at "${path}": expected ${diagnostic.details.to}, got ${diagnostic.details.from}`
+    );
+  }
+}
+```
+
 ### Discriminated unions
 
 Events, webhooks, and polymorphic responses often use a discriminator field:

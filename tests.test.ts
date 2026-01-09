@@ -1798,6 +1798,84 @@ describe("readme examples", () => {
     });
   });
 
+  describe("detecting API response mismatches", () => {
+    const UserResponse = object({
+      id: number(),
+      name: string(),
+      email: string(),
+      role: literal("admin"),
+    });
+
+    test("detects missing fields with default diagnostic", () => {
+      const input = { id: 123, name: "alice" }; // missing email and role
+      const { value, diagnostics } = parseWithDiagnostics(UserResponse, input);
+
+      // Value is still usable
+      expect(value.id).toBe(123);
+      expect(value.name).toBe("alice");
+      expect(value.email).toBe(""); // default
+      expect(value.role).toBe("admin"); // default
+
+      // Diagnostics indicate missing fields
+      const defaultDiags = diagnostics.filter((d) => d.kind === "default");
+      expect(defaultDiags).toHaveLength(2);
+      expect(defaultDiags[0]!.path).toEqual(["email"]);
+      expect(defaultDiags[1]!.path).toEqual(["role"]);
+    });
+
+    test("detects type coercion with coercion diagnostic", () => {
+      const input = {
+        id: "456",
+        name: "bob",
+        email: "bob@example.com",
+        role: "admin",
+      };
+      const { value, diagnostics } = parseWithDiagnostics(UserResponse, input);
+
+      // Value is coerced
+      expect(value.id).toBe(456);
+
+      // Diagnostic indicates coercion
+      const coercionDiags = diagnostics.filter((d) => d.kind === "coercion");
+      expect(coercionDiags.length).toBe(1);
+      expect(coercionDiags[0]!.path).toEqual(["id"]);
+      expect(coercionDiags[0]!.details).toEqual({
+        from: "string",
+        to: "number",
+      });
+    });
+
+    test("logs warnings for mismatches without breaking", () => {
+      const input = { id: "789", name: 42 }; // id is string, name is number, missing email and role
+      const { value, diagnostics } = parseWithDiagnostics(UserResponse, input);
+
+      const coercions = diagnostics.filter((d) => d.kind === "coercion");
+      const defaults = diagnostics.filter((d) => d.kind === "default");
+
+      expect(coercions).toHaveLength(2);
+      expect(coercions[0]).toMatchObject({
+        kind: "coercion",
+        path: ["id"],
+        details: { from: "string", to: "number" },
+      });
+      expect(coercions[1]).toMatchObject({
+        kind: "coercion",
+        path: ["name"],
+        details: { from: "number", to: "string" },
+      });
+
+      expect(defaults).toHaveLength(2);
+      expect(defaults[0]).toMatchObject({ kind: "default", path: ["email"] });
+      expect(defaults[1]).toMatchObject({ kind: "default", path: ["role"] });
+
+      // Value is still usable
+      expect(value.id).toBe(789);
+      expect(value.name).toBe("42");
+      expect(value.email).toBe("");
+      expect(value.role).toBe("admin");
+    });
+  });
+
   describe("discriminated unions - webhook events", () => {
     const WebhookEvent = union(
       object(
