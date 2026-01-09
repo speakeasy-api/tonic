@@ -6,8 +6,100 @@ type DeepPrettify<T> = T extends (infer U)[]
   ? Prettify<{ [K in keyof T]: DeepPrettify<T[K]> }>
   : T;
 
+// Diagnostic types for parseWithDiagnostics
+export type DiagnosticKind =
+  | "coercion"
+  | "default"
+  | "literal_mismatch"
+  | "literal_coercion"
+  | "literal_default"
+  | "union_selection"
+  | "field_alias"
+  | "array_wrap";
+
+export interface CoercionDetails {
+  from: string;
+  to: string;
+}
+
+export interface DefaultDetails {
+  schema: string;
+  value: unknown;
+}
+
+export interface LiteralDetails {
+  expected: unknown;
+  received: unknown;
+}
+
+export interface UnionSelectionDetails {
+  chosenIndex: number;
+  chosenName?: string;
+  reason: "exact match" | "type match" | "best score";
+}
+
+export interface FieldAliasDetails {
+  from: string;
+}
+
+export interface ArrayWrapDetails {
+  valueType: string;
+}
+
+// Strongly typed details by kind
+export type DiagnosticDetailsByKind = {
+  coercion: CoercionDetails;
+  default: DefaultDetails;
+  literal_mismatch: LiteralDetails;
+  literal_coercion: LiteralDetails;
+  literal_default: LiteralDetails;
+  union_selection: UnionSelectionDetails;
+  field_alias: FieldAliasDetails;
+  array_wrap: ArrayWrapDetails;
+};
+
+export interface Diagnostic<K extends DiagnosticKind = DiagnosticKind> {
+  kind: K;
+  path: string;
+  details?: DiagnosticDetailsByKind[K];
+}
+
+export interface ParseResult<T> {
+  value: T;
+  diagnostics: Diagnostic[];
+}
+
+interface ParseContext {
+  diagnostics: Diagnostic[];
+  path: (string | number)[];
+}
+
+function formatPath(segments: (string | number)[]): string {
+  if (segments.length === 0) return "";
+  return segments.reduce<string>((acc, segment, i) => {
+    if (typeof segment === "number") {
+      return `${acc}[${segment}]`;
+    }
+    return i === 0 ? segment : `${acc}.${segment}`;
+  }, "");
+}
+
+// Helper to add diagnostic only if context is present
+function diag<K extends DiagnosticKind>(
+  ctx: ParseContext | undefined,
+  kind: K,
+  details?: DiagnosticDetailsByKind[K]
+): void {
+  if (!ctx) return;
+  ctx.diagnostics.push({
+    kind,
+    path: formatPath(ctx.path),
+    details,
+  } as Diagnostic);
+}
+
 export type Schema<T = unknown> = {
-  (value: unknown): T;
+  (value: unknown, ctx?: ParseContext): T;
   _output: T;
   _kind: string;
   _default: T;
@@ -28,7 +120,7 @@ function isNonEmptyArray<T>(value: T[]): value is NonEmptyArray<T> {
 function createSchema<T>(
   kind: string,
   defaultValue: T,
-  parse: (value: unknown) => T
+  parse: (value: unknown, ctx?: ParseContext) => T
 ): Schema<T> {
   const schema = parse as Schema<T>;
   schema._output = null as unknown as T;
@@ -38,42 +130,80 @@ function createSchema<T>(
 }
 
 export function string(): Schema<string> {
-  return createSchema("string", "", (value) => {
-    if (typeof value === "string") return value;
-    if (value === undefined || value === null) return "";
-    if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
+  return createSchema(
+    "string",
+    "",
+    (value: unknown, ctx?: ParseContext): string => {
+      const type = typeof value;
+      if (type === "string") return value as string;
+
+      if (value === undefined || value === null) {
+        diag(ctx, "default", { schema: "string", value: "" });
+        return "";
+      }
+
+      let result: string;
+      if (isPlainObject(value) || Array.isArray(value)) {
+        result = JSON.stringify(value);
+      } else {
+        result = String(value);
+      }
+
+      diag(ctx, "coercion", { from: type, to: "string" });
+      return result;
     }
-    if (isPlainObject(value) || Array.isArray(value)) {
-      return JSON.stringify(value);
-    }
-    return String(value);
-  });
+  );
 }
 
 export function number(): Schema<number> {
-  return createSchema("number", 0, (value) => {
-    if (typeof value === "number" && !Number.isNaN(value)) return value;
-    if (value === undefined || value === null) return 0;
-    if (typeof value === "string") {
-      const parsed = parseFloat(value);
-      if (!Number.isNaN(parsed)) return parsed;
+  return createSchema(
+    "number",
+    0,
+    (value: unknown, ctx?: ParseContext): number => {
+      if (value === undefined || value === null) {
+        diag(ctx, "default", { schema: "number", value: 0 });
+        return 0;
+      }
+
+      const type = typeof value;
+      if (type === "number" && !Number.isNaN(value)) return value as number;
+
+      if (type === "string" || type === "boolean") {
+        const parsed = +value;
+        if (!Number.isNaN(parsed)) {
+          diag(ctx, "coercion", { from: type, to: "number" });
+          return parsed;
+        }
+        diag(ctx, "default", { schema: "number", value: 0 });
+        return 0;
+      }
+
+      diag(ctx, "coercion", { from: type, to: "number" });
+      return 0;
     }
-    if (typeof value === "boolean") return value ? 1 : 0;
-    return 0;
-  });
+  );
 }
 
 export function boolean(): Schema<boolean> {
-  return createSchema("boolean", false, (value) => {
-    if (typeof value === "boolean") return value;
-    if (value === undefined || value === null) return false;
-    if (value === "true" || value === 1) return true;
-    if (value === "false" || value === 0) return false;
-    if (typeof value === "string") return value.length > 0;
-    if (typeof value === "number") return value !== 0;
-    return Boolean(value);
-  });
+  return createSchema(
+    "boolean",
+    false,
+    (value: unknown, ctx?: ParseContext): boolean => {
+      if (value === undefined || value === null) {
+        diag(ctx, "default", { schema: "boolean", value: false });
+        return false;
+      }
+      const type = typeof value;
+      if (type === "boolean") return value as boolean;
+
+      let result: boolean;
+      if (value === "false" || value === 0) result = false;
+      else result = Boolean(value);
+
+      diag(ctx, "coercion", { from: typeof value, to: "boolean" });
+      return result;
+    }
+  );
 }
 
 type LiteralOutput<T> = T extends string
@@ -88,66 +218,79 @@ export function literal<T>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
   const defaultVal = expected as LiteralOutput<T>;
-  const schema = createSchema(
-    "literal",
-    defaultVal,
-    (value): LiteralOutput<T> => {
-      if (value === undefined || value === null) {
-        return expected as LiteralOutput<T>;
-      }
 
-      if (value === expected) {
-        return expected as LiteralOutput<T>;
+  // Helper to coerce value to expected type
+  const coerceValue = (value: unknown): LiteralOutput<T> => {
+    if (typeof expected === "string") {
+      if (typeof value === "string") return value as LiteralOutput<T>;
+      if (typeof value === "number" || typeof value === "boolean") {
+        return String(value) as LiteralOutput<T>;
       }
-
-      if (typeof expected === "string") {
-        if (typeof value === "string") {
-          return value as LiteralOutput<T>;
-        }
-        if (typeof value === "number" || typeof value === "boolean") {
-          return String(value) as LiteralOutput<T>;
-        }
-        return expected as LiteralOutput<T>;
-      }
-
-      if (typeof expected === "number") {
-        if (typeof value === "number" && !Number.isNaN(value)) {
-          return value as LiteralOutput<T>;
-        }
-        if (typeof value === "string") {
-          const parsed = parseFloat(value);
-          if (!Number.isNaN(parsed)) {
-            return parsed as LiteralOutput<T>;
-          }
-        }
-        if (typeof value === "boolean") {
-          return (value ? 1 : 0) as LiteralOutput<T>;
-        }
-        return expected as LiteralOutput<T>;
-      }
-
-      if (typeof expected === "boolean") {
-        if (typeof value === "boolean") {
-          return value as LiteralOutput<T>;
-        }
-        if (value === "true" || value === 1) {
-          return true as LiteralOutput<T>;
-        }
-        if (value === "false" || value === 0) {
-          return false as LiteralOutput<T>;
-        }
-        if (typeof value === "string") {
-          return (value.length > 0) as LiteralOutput<T>;
-        }
-        if (typeof value === "number") {
-          return (value !== 0) as LiteralOutput<T>;
-        }
-        return expected as LiteralOutput<T>;
-      }
-
       return expected as LiteralOutput<T>;
     }
-  ) as Schema<LiteralOutput<T>> & { _literal: T };
+
+    if (typeof expected === "number") {
+      if (typeof value === "number" && !Number.isNaN(value)) {
+        return value as LiteralOutput<T>;
+      }
+      if (typeof value === "string") {
+        const parsed = parseFloat(value);
+        if (!Number.isNaN(parsed)) return parsed as LiteralOutput<T>;
+      }
+      if (typeof value === "boolean") {
+        return (value ? 1 : 0) as LiteralOutput<T>;
+      }
+      return expected as LiteralOutput<T>;
+    }
+
+    if (typeof expected === "boolean") {
+      if (typeof value === "boolean") return value as LiteralOutput<T>;
+      if (value === "true" || value === 1) return true as LiteralOutput<T>;
+      if (value === "false" || value === 0) return false as LiteralOutput<T>;
+      if (typeof value === "string")
+        return (value.length > 0) as LiteralOutput<T>;
+      if (typeof value === "number") return (value !== 0) as LiteralOutput<T>;
+      return expected as LiteralOutput<T>;
+    }
+
+    return expected as LiteralOutput<T>;
+  };
+
+  const parse = (value: unknown, ctx?: ParseContext): LiteralOutput<T> => {
+    // Null/undefined -> literal default
+    if (value === undefined || value === null) {
+      diag(ctx, "literal_default", { expected, received: value });
+      return expected as LiteralOutput<T>;
+    }
+
+    // Exact match -> no diagnostic
+    if (value === expected) {
+      return expected as LiteralOutput<T>;
+    }
+
+    // Same type, different value -> literal_mismatch
+    if (typeof value === typeof expected) {
+      if (typeof expected === "number" && Number.isNaN(value as number)) {
+        diag(ctx, "literal_default", { expected, received: value });
+        return expected as LiteralOutput<T>;
+      }
+      diag(ctx, "literal_mismatch", { expected, received: value });
+      return value as LiteralOutput<T>;
+    }
+
+    // Different type -> try coercion
+    const result = coerceValue(value);
+    if (result === expected) {
+      diag(ctx, "literal_default", { expected, received: value });
+    } else {
+      diag(ctx, "literal_coercion", { expected, received: value });
+    }
+    return result;
+  };
+
+  const schema = createSchema("literal", defaultVal, parse) as Schema<
+    LiteralOutput<T>
+  > & { _literal: T };
 
   schema._literal = expected;
   return schema;
@@ -181,7 +324,7 @@ export function object<T extends ObjectShape>(
     }
   }
 
-  const schema = createSchema("object", defaultVal, (value) => {
+  const parse = (value: unknown, ctx?: ParseContext): InferObject<T> => {
     const {
       __proto__: _,
       prototype: __,
@@ -201,18 +344,33 @@ export function object<T extends ObjectShape>(
 
       // Delete the alias key if different from schema key
       if (fromKey !== key && fromKey in input) {
+        ctx?.path.push(key);
+        diag(ctx, "field_alias", { from: fromKey });
+        ctx?.path.pop();
         delete input[fromKey];
       }
 
       if ("_optional" in propSchema && propValue === undefined) {
         delete input[key];
       } else {
-        input[key] = propSchema(propValue);
+        ctx?.path.push(key);
+        if (propValue === undefined && !("_optional" in propSchema)) {
+          diag(ctx, "default", {
+            schema: propSchema._kind,
+            value: propSchema._default,
+          });
+        }
+        input[key] = propSchema(propValue, ctx);
+        ctx?.path.pop();
       }
     }
 
     return input as InferObject<T>;
-  }) as Schema<InferObject<T>> & { _shape: T; _name?: string };
+  };
+
+  const schema = createSchema("object", defaultVal, parse) as Schema<
+    InferObject<T>
+  > & { _shape: T; _name?: string };
 
   schema._shape = shape;
   schema._name = name;
@@ -220,20 +378,40 @@ export function object<T extends ObjectShape>(
 }
 
 export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
-  return createSchema("array", [] as Infer<T>[], (value): Infer<T>[] => {
-    if (!Array.isArray(value)) {
-      if (value === undefined || value === null) return [];
-      return [element(value) as Infer<T>];
+  return createSchema(
+    "array",
+    [] as Infer<T>[],
+    (value: unknown, ctx?: ParseContext): Infer<T>[] => {
+      if (!Array.isArray(value)) {
+        if (value === undefined || value === null) {
+          diag(ctx, "default", { schema: "array", value: [] });
+          return [];
+        }
+        diag(ctx, "array_wrap", { valueType: typeof value });
+        ctx?.path.push(0);
+        const result = element(value, ctx) as Infer<T>;
+        ctx?.path.pop();
+        return [result];
+      }
+      return value.map((v, i) => {
+        ctx?.path.push(i);
+        const result = element(v, ctx) as Infer<T>;
+        ctx?.path.pop();
+        return result;
+      });
     }
-    return value.map((v) => element(v) as Infer<T>);
-  });
+  );
 }
 
 export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
-  const schema = createSchema("optional", undefined, (value) => {
-    if (value === undefined) return undefined;
-    return inner(value);
-  }) as OptionalSchema<Infer<T>>;
+  const schema = createSchema(
+    "optional",
+    undefined,
+    (value: unknown, ctx?: ParseContext): Infer<T> | undefined => {
+      if (value === undefined) return undefined;
+      return inner(value, ctx) as Infer<T>;
+    }
+  ) as OptionalSchema<Infer<T>>;
 
   schema._optional = true;
   (schema as unknown as { _inner: T })._inner = inner;
@@ -241,10 +419,14 @@ export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
 }
 
 export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
-  const schema = createSchema("nullable", null, (value) => {
-    if (value === null || value === undefined) return null;
-    return inner(value);
-  }) as NullableSchema<Infer<T>>;
+  const schema = createSchema(
+    "nullable",
+    null,
+    (value: unknown, ctx?: ParseContext): Infer<T> | null => {
+      if (value === null || value === undefined) return null;
+      return inner(value, ctx) as Infer<T>;
+    }
+  ) as NullableSchema<Infer<T>>;
 
   schema._nullable = true;
   (schema as unknown as { _inner: T })._inner = inner;
@@ -262,18 +444,13 @@ export function field<T extends Schema>(
   inner: T,
   options?: { from?: string }
 ): FieldReturn<T> {
-  const schema = ((value: unknown) => inner(value)) as FieldReturn<T>;
+  const schema = ((value: unknown, ctx?: ParseContext) =>
+    inner(value, ctx)) as FieldReturn<T>;
   Object.assign(schema, inner);
   if (options?.from) {
     schema._from = options.from;
   }
   return schema;
-}
-
-interface ParseMeta {
-  chosenIndex: number;
-  chosenName?: string;
-  candidates: CandidateScore[];
 }
 
 interface CandidateScore {
@@ -549,11 +726,33 @@ export function union<T extends Schema[]>(
 
   const defaultVal = schemas[0]!._default as Infer<T[number]>;
 
-  const schema = createSchema("union", defaultVal, (value) => {
+  const parse = (value: unknown, ctx?: ParseContext): Infer<T[number]> => {
     const { best } = pickUnion(schemas, value, false);
     const chosenIndex = best?.index ?? 0;
-    return schemas[chosenIndex]!(value);
-  }) as Schema<Infer<T[number]>> & { _schemas: T };
+    const chosenSchema = schemas[chosenIndex]!;
+
+    // Determine selection reason
+    let reason: "exact match" | "type match" | "best score";
+    if (best?.exactMatch) {
+      reason = "exact match";
+    } else if (best?.typeMatch) {
+      reason = "type match";
+    } else {
+      reason = "best score";
+    }
+
+    diag(ctx, "union_selection", {
+      chosenIndex,
+      chosenName: best?.name,
+      reason,
+    });
+
+    return chosenSchema(value, ctx) as Infer<T[number]>;
+  };
+
+  const schema = createSchema("union", defaultVal, parse) as Schema<
+    Infer<T[number]>
+  > & { _schemas: T };
 
   schema._schemas = schemas;
   return schema;
@@ -563,44 +762,19 @@ export function parse<T extends Schema>(schema: T, value: unknown): Infer<T> {
   return schema(value) as Infer<T>;
 }
 
-export function parseWithMeta<T extends Schema>(
+export function parseWithDiagnostics<T extends Schema>(
   schema: T,
   value: unknown
-): { value: Infer<T>; meta: ParseMeta } {
-  if (schema._kind === "union") {
-    const unionSchema = schema as unknown as Schema & { _schemas: Schema[] };
-    const schemas = unionSchema._schemas;
+): ParseResult<Infer<T>> {
+  const ctx: ParseContext = {
+    diagnostics: [],
+    path: [],
+  };
 
-    if (!isNonEmptyArray(schemas)) {
-      return {
-        value: undefined as Infer<T>,
-        meta: {
-          chosenIndex: 0,
-          candidates: [],
-        },
-      };
-    }
-
-    const { best, candidates } = pickUnion(schemas, value, true);
-
-    const chosenIndex = best?.index ?? 0;
-    const result = schemas[chosenIndex]!(value);
-
-    return {
-      value: result as Infer<T>,
-      meta: {
-        chosenIndex,
-        chosenName: best?.name,
-        candidates,
-      },
-    };
-  }
+  const result = schema(value, ctx) as Infer<T>;
 
   return {
-    value: schema(value) as Infer<T>,
-    meta: {
-      chosenIndex: 0,
-      candidates: [],
-    },
+    value: result,
+    diagnostics: ctx.diagnostics,
   };
 }

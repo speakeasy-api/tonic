@@ -11,10 +11,20 @@ import {
   literal,
   union,
   parse,
-  parseWithMeta,
+  parseWithDiagnostics,
   field,
   type Infer,
+  type Diagnostic,
+  type UnionSelectionDetails,
 } from "./index";
+
+// Helper to get union selection details from diagnostics
+function getUnionSelection(
+  diagnostics: Diagnostic[]
+): UnionSelectionDetails | undefined {
+  const d = diagnostics.find((d) => d.kind === "union_selection");
+  return d?.details as UnionSelectionDetails | undefined;
+}
 
 // ============================================================================
 // PRIMITIVE SCHEMAS
@@ -511,9 +521,12 @@ describe("oneOf - object scoring", () => {
 
     const schema = union(Card, Bank);
 
-    const result = parseWithMeta(schema, { kind: "card", number: "4242" });
+    const result = parseWithDiagnostics(schema, {
+      kind: "card",
+      number: "4242",
+    });
     expect(result.value).toEqual({ kind: "card", number: "4242" });
-    expect(result.meta.chosenName).toBe("Card");
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe("Card");
   });
 
   test("scores by unique property", () => {
@@ -522,11 +535,11 @@ describe("oneOf - object scoring", () => {
 
     const schema = union(TypeA, TypeB);
 
-    const result1 = parseWithMeta(schema, { common: "x", uniqueA: "y" });
-    expect(result1.meta.chosenIndex).toBe(0);
+    const result1 = parseWithDiagnostics(schema, { common: "x", uniqueA: "y" });
+    expect(getUnionSelection(result1.diagnostics)?.chosenIndex).toBe(0);
 
-    const result2 = parseWithMeta(schema, { common: "x", uniqueB: "y" });
-    expect(result2.meta.chosenIndex).toBe(1);
+    const result2 = parseWithDiagnostics(schema, { common: "x", uniqueB: "y" });
+    expect(getUnionSelection(result2.diagnostics)?.chosenIndex).toBe(1);
   });
 
   test("literal accepts any value of same type", () => {
@@ -555,12 +568,16 @@ describe("oneOf - object scoring", () => {
     const schema = union(StringObj, NumberObj);
 
     // String value should prefer StringObj
-    const result1 = parseWithMeta(schema, { value: "hello" });
-    expect(result1.meta.chosenName).toBe("StringObj");
+    const result1 = parseWithDiagnostics(schema, { value: "hello" });
+    expect(getUnionSelection(result1.diagnostics)?.chosenName).toBe(
+      "StringObj"
+    );
 
     // Number value should prefer NumberObj
-    const result2 = parseWithMeta(schema, { value: 42 });
-    expect(result2.meta.chosenName).toBe("NumberObj");
+    const result2 = parseWithDiagnostics(schema, { value: 42 });
+    expect(getUnionSelection(result2.diagnostics)?.chosenName).toBe(
+      "NumberObj"
+    );
   });
 });
 
@@ -627,18 +644,20 @@ describe("oneOf - real world scenarios", () => {
     });
   });
 
-  test("debugging with parseWithMeta", () => {
+  test("debugging with parseWithDiagnostics", () => {
     const A = object({ type: literal("a"), a: string() }, "A");
     const B = object({ type: literal("b"), b: string() }, "B");
 
     const U = union(A, B);
 
-    const out = parseWithMeta(U, { type: "a", a: "x", extra: 1 });
+    const out = parseWithDiagnostics(U, { type: "a", a: "x", extra: 1 });
 
     expect(out.value).toEqual({ type: "a", a: "x", extra: 1 });
-    expect(out.meta.chosenIndex).toBe(0);
-    expect(out.meta.chosenName).toBe("A");
-    expect(out.meta.candidates.length).toBeGreaterThan(0);
+    expect(getUnionSelection(out.diagnostics)?.chosenIndex).toBe(0);
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("A");
+    expect(out.diagnostics.some((d) => d.kind === "union_selection")).toBe(
+      true
+    );
   });
 });
 
@@ -887,12 +906,12 @@ describe("open enum behavior", () => {
     const schema = union(Cat, Dog);
 
     // Exact match on discriminator
-    const catResult = parseWithMeta(schema, { kind: "cat" });
-    expect(catResult.meta.chosenName).toBe("Cat");
+    const catResult = parseWithDiagnostics(schema, { kind: "cat" });
+    expect(getUnionSelection(catResult.diagnostics)?.chosenName).toBe("Cat");
     expect(catResult.value.kind).toBe("cat");
 
-    const dogResult = parseWithMeta(schema, { kind: "dog" });
-    expect(dogResult.meta.chosenName).toBe("Dog");
+    const dogResult = parseWithDiagnostics(schema, { kind: "dog" });
+    expect(getUnionSelection(dogResult.diagnostics)?.chosenName).toBe("Dog");
     expect(dogResult.value.kind).toBe("dog");
   });
 
@@ -904,9 +923,9 @@ describe("open enum behavior", () => {
     const schema = union(Cat, Dog);
 
     // Unknown discriminator value - both accept, first wins due to tie-break
-    const result = parseWithMeta(schema, { kind: "bat" });
+    const result = parseWithDiagnostics(schema, { kind: "bat" });
     expect(result.value.kind).toBe("bat"); // Value preserved
-    expect(result.meta.chosenIndex).toBe(0); // First wins on tie
+    expect(getUnionSelection(result.diagnostics)?.chosenIndex).toBe(0); // First wins on tie
   });
 
   test("union discrimination with unknown discriminator - field coverage decides", () => {
@@ -917,8 +936,8 @@ describe("open enum behavior", () => {
     const schema = union(Cat, Dog);
 
     // Unknown kind "bat" + has name field → Cat should win (more field coverage)
-    const result = parseWithMeta(schema, { kind: "bat", name: "Bruce" });
-    expect(result.meta.chosenName).toBe("Cat");
+    const result = parseWithDiagnostics(schema, { kind: "bat", name: "Bruce" });
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe("Cat");
     expect(result.value.kind).toBe("bat");
     expect(result.value.name).toBe("Bruce");
   });
@@ -936,13 +955,13 @@ describe("open enum behavior", () => {
     const schema = union(A, B);
 
     // Payload has "bar" field, should match B
-    const resultB = parseWithMeta(schema, { inner: { bar: "bar" } });
-    expect(resultB.meta.chosenName).toBe("B");
+    const resultB = parseWithDiagnostics(schema, { inner: { bar: "bar" } });
+    expect(getUnionSelection(resultB.diagnostics)?.chosenName).toBe("B");
     expect(resultB.value.inner.bar).toBe("bar");
 
     // Payload has "foo" field, should match A
-    const resultA = parseWithMeta(schema, { inner: { foo: "foo" } });
-    expect(resultA.meta.chosenName).toBe("A");
+    const resultA = parseWithDiagnostics(schema, { inner: { foo: "foo" } });
+    expect(getUnionSelection(resultA.diagnostics)?.chosenName).toBe("A");
     expect(resultA.value.inner.foo).toBe("foo");
   });
 
@@ -964,10 +983,10 @@ describe("open enum behavior", () => {
     const schema = union(OptionA, OptionB);
 
     // Payload with unknown values + name field → OptionB should win (better field coverage)
-    const result = parseWithMeta(schema, {
+    const result = parseWithDiagnostics(schema, {
       data: { kind: "unknown", name: "also_unknown" },
     });
-    expect(result.meta.chosenName).toBe("OptionB");
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe("OptionB");
     expect(result.value.data.kind).toBe("unknown");
     expect(result.value.data.name).toBe("also_unknown");
   });
@@ -1003,12 +1022,16 @@ describe("open enum behavior", () => {
     const schema = union(Minimal, Extended);
 
     // Payload only has "foo", Minimal wins (fewer missing required fields)
-    const result1 = parseWithMeta(schema, { foo: "test" });
-    expect(result1.meta.chosenName).toBe("Minimal");
+    const result1 = parseWithDiagnostics(schema, { foo: "test" });
+    expect(getUnionSelection(result1.diagnostics)?.chosenName).toBe("Minimal");
 
     // Payload has all fields, Extended wins
-    const result2 = parseWithMeta(schema, { foo: "test", bar: "b", baz: "c" });
-    expect(result2.meta.chosenName).toBe("Extended");
+    const result2 = parseWithDiagnostics(schema, {
+      foo: "test",
+      bar: "b",
+      baz: "c",
+    });
+    expect(getUnionSelection(result2.diagnostics)?.chosenName).toBe("Extended");
   });
 });
 
@@ -1026,13 +1049,13 @@ describe("stress scenarios", () => {
     const schema = union(A, B);
 
     // Has B's unique prop but kind says "a" -> should pick A if discriminator scoring dominates.
-    const out = parseWithMeta(schema, {
+    const out = parseWithDiagnostics(schema, {
       kind: "a",
       common: "x",
       bOnly: "present",
     });
 
-    expect(out.meta.chosenName).toBe("A");
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("A");
     expect(out.value.kind).toBe("a");
     // Defaults for missing schema props should be injected
     expect(out.value.aOnly).toBe("");
@@ -1045,12 +1068,12 @@ describe("stress scenarios", () => {
     const S2 = object({ value: string() }, "S2");
     const schema = union(S1, S2);
 
-    const out = parseWithMeta(schema, { value: "x" });
+    const out = parseWithDiagnostics(schema, { value: "x" });
 
     // With identical fit, library should be deterministic and stable.
     // If your implementation chooses first, enforce that explicitly:
-    expect(out.meta.chosenIndex).toBe(0);
-    expect(out.meta.chosenName).toBe("S1");
+    expect(getUnionSelection(out.diagnostics)?.chosenIndex).toBe(0);
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("S1");
   });
 
   test("oneOf: prefers native type match over match-via-coercion (string input)", () => {
@@ -1059,9 +1082,9 @@ describe("stress scenarios", () => {
     const schema = union(StringObj, NumberObj);
 
     // "42" can become number 42, but it is natively a string; prefer StringObj if scoring uses raw type match.
-    const out = parseWithMeta(schema, { value: "42" });
+    const out = parseWithDiagnostics(schema, { value: "42" });
 
-    expect(out.meta.chosenName).toBe("StringObj");
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("StringObj");
     expect(out.value).toEqual({ value: "42" });
   });
 
@@ -1084,10 +1107,10 @@ describe("stress scenarios", () => {
     const DeepB = object({ x: string() }, "DeepB");
     const schema = union(DeepA, DeepB);
 
-    const out = parseWithMeta(schema, {});
+    const out = parseWithDiagnostics(schema, {});
 
     // If tie resolves to first, it should deeply initialise defaults.
-    expect(out.meta.chosenName).toBe("DeepA");
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("DeepA");
     expect(out.value).toEqual({
       a: { b: { c: { s: "", n: 0, ok: false } } },
     });
@@ -1151,16 +1174,16 @@ describe("stress scenarios", () => {
 
     const schema = union(AsArray, AsObject);
 
-    const out1 = parseWithMeta(schema, ["1", 2, "3"]);
-    expect(out1.meta.chosenIndex).toBe(0);
+    const out1 = parseWithDiagnostics(schema, ["1", 2, "3"]);
+    expect(getUnionSelection(out1.diagnostics)?.chosenIndex).toBe(0);
     expect(out1.value).toEqual([1, 2, 3]);
 
-    const out2 = parseWithMeta(schema, {
+    const out2 = parseWithDiagnostics(schema, {
       items: ["1", 2, "bad"],
       note: 123,
       extra: true,
     });
-    expect(out2.meta.chosenName).toBe("AsObject");
+    expect(getUnionSelection(out2.diagnostics)?.chosenName).toBe("AsObject");
     expect(out2.value).toEqual({ items: [1, 2, 0], note: "123", extra: true });
   });
 
@@ -1352,9 +1375,9 @@ describe("stress scenarios", () => {
       extra: { x: 1 },
     };
 
-    const out = parseWithMeta(schema, input);
+    const out = parseWithDiagnostics(schema, input);
 
-    expect(out.meta.chosenName).toBe("D");
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("D");
     expect(out.value).toEqual({
       kind: "d",
       common: "999",
@@ -1459,8 +1482,8 @@ describe("primitive coercion scoring", () => {
 
     // "42" is a parseable number string, but string is also a match
     // String should win since it's an exact type match
-    const result = parseWithMeta(schema, "42");
-    expect(result.meta.chosenIndex).toBe(1); // string wins on type match
+    const result = parseWithDiagnostics(schema, "42");
+    expect(getUnionSelection(result.diagnostics)?.chosenIndex).toBe(1); // string wins on type match
   });
 
   test("boolean schema scores higher for boolean-like values", () => {
@@ -1469,8 +1492,8 @@ describe("primitive coercion scoring", () => {
     const schema = union(BoolSchema, StrSchema);
 
     // "true" can be coerced to boolean but string is also a match
-    const result = parseWithMeta(schema, "true");
-    expect(result.meta.chosenIndex).toBe(1); // string wins on type match
+    const result = parseWithDiagnostics(schema, "true");
+    expect(getUnionSelection(result.diagnostics)?.chosenIndex).toBe(1); // string wins on type match
   });
 
   test("number schema gets bonus for parseable string when competing with object", () => {
@@ -1478,8 +1501,8 @@ describe("primitive coercion scoring", () => {
     const ObjSchema = object({ value: string() });
     const schema = union(NumSchema, ObjSchema);
 
-    const result = parseWithMeta(schema, "42");
-    expect(result.meta.chosenIndex).toBe(0); // number wins for parseable string
+    const result = parseWithDiagnostics(schema, "42");
+    expect(getUnionSelection(result.diagnostics)?.chosenIndex).toBe(0); // number wins for parseable string
   });
 
   test("boolean schema gets bonus for boolean-like strings when competing with object", () => {
@@ -1487,51 +1510,47 @@ describe("primitive coercion scoring", () => {
     const ObjSchema = object({ value: string() });
     const schema = union(BoolSchema, ObjSchema);
 
-    const result = parseWithMeta(schema, "true");
-    expect(result.meta.chosenIndex).toBe(0); // boolean wins for "true"
+    const result = parseWithDiagnostics(schema, "true");
+    expect(getUnionSelection(result.diagnostics)?.chosenIndex).toBe(0); // boolean wins for "true"
 
-    const result2 = parseWithMeta(schema, "false");
-    expect(result2.meta.chosenIndex).toBe(0); // boolean wins for "false"
+    const result2 = parseWithDiagnostics(schema, "false");
+    expect(getUnionSelection(result2.diagnostics)?.chosenIndex).toBe(0); // boolean wins for "false"
 
-    const result3 = parseWithMeta(schema, 0);
-    expect(result3.meta.chosenIndex).toBe(0); // boolean wins for 0
+    const result3 = parseWithDiagnostics(schema, 0);
+    expect(getUnionSelection(result3.diagnostics)?.chosenIndex).toBe(0); // boolean wins for 0
 
-    const result4 = parseWithMeta(schema, 1);
-    expect(result4.meta.chosenIndex).toBe(0); // boolean wins for 1
+    const result4 = parseWithDiagnostics(schema, 1);
+    expect(getUnionSelection(result4.diagnostics)?.chosenIndex).toBe(0); // boolean wins for 1
   });
 });
 
-describe("parseWithMeta with non-union schemas", () => {
-  test("returns meta with chosenIndex 0 for string schema", () => {
+describe("parseWithDiagnostics with non-union schemas", () => {
+  test("returns no union_selection diagnostic for string schema", () => {
     const schema = string();
-    const result = parseWithMeta(schema, "hello");
+    const result = parseWithDiagnostics(schema, "hello");
     expect(result.value).toBe("hello");
-    expect(result.meta.chosenIndex).toBe(0);
-    expect(result.meta.candidates).toEqual([]);
+    expect(getUnionSelection(result.diagnostics)).toBeUndefined();
   });
 
-  test("returns meta with chosenIndex 0 for number schema", () => {
+  test("returns no union_selection diagnostic for number schema", () => {
     const schema = number();
-    const result = parseWithMeta(schema, 42);
+    const result = parseWithDiagnostics(schema, 42);
     expect(result.value).toBe(42);
-    expect(result.meta.chosenIndex).toBe(0);
-    expect(result.meta.candidates).toEqual([]);
+    expect(getUnionSelection(result.diagnostics)).toBeUndefined();
   });
 
-  test("returns meta with chosenIndex 0 for object schema", () => {
+  test("returns no union_selection diagnostic for object schema", () => {
     const schema = object({ name: string() });
-    const result = parseWithMeta(schema, { name: "test" });
+    const result = parseWithDiagnostics(schema, { name: "test" });
     expect(result.value).toEqual({ name: "test" });
-    expect(result.meta.chosenIndex).toBe(0);
-    expect(result.meta.candidates).toEqual([]);
+    expect(getUnionSelection(result.diagnostics)).toBeUndefined();
   });
 
-  test("returns meta with chosenIndex 0 for array schema", () => {
+  test("returns no union_selection diagnostic for array schema", () => {
     const schema = array(number());
-    const result = parseWithMeta(schema, [1, 2, 3]);
+    const result = parseWithDiagnostics(schema, [1, 2, 3]);
     expect(result.value).toEqual([1, 2, 3]);
-    expect(result.meta.chosenIndex).toBe(0);
-    expect(result.meta.candidates).toEqual([]);
+    expect(getUnionSelection(result.diagnostics)).toBeUndefined();
   });
 });
 
@@ -1547,9 +1566,9 @@ describe("robustness issues", () => {
     expect(result).toBeUndefined();
   });
 
-  test("parseWithMeta with empty union should not crash", () => {
+  test("parseWithDiagnostics with empty union should not crash", () => {
     const schema = union();
-    expect(() => parseWithMeta(schema, "anything")).not.toThrow();
+    expect(() => parseWithDiagnostics(schema, "anything")).not.toThrow();
   });
 
   test("deeply nested object scoring should not cause stack overflow", () => {
@@ -1587,8 +1606,10 @@ describe("robustness issues", () => {
     const schema = union(StringKind, NumberKind);
 
     // Passing string to number literal should be penalized
-    const result = parseWithMeta(schema, { kind: "hello", value: 123 });
-    expect(result.meta.chosenName).toBe("StringKind");
+    const result = parseWithDiagnostics(schema, { kind: "hello", value: 123 });
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe(
+      "StringKind"
+    );
   });
 
   test("boolean property type matching in nested objects", () => {
@@ -1599,8 +1620,8 @@ describe("robustness issues", () => {
     );
     const schema = union(WithBool, WithString);
 
-    const result = parseWithMeta(schema, { active: true, name: "test" });
-    expect(result.meta.chosenName).toBe("WithBool");
+    const result = parseWithDiagnostics(schema, { active: true, name: "test" });
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe("WithBool");
   });
 
   test("early exit should not cause false positive when score accumulates past threshold", () => {
@@ -1669,8 +1690,10 @@ describe("robustness issues", () => {
       nested2: { x: "d", y: "e", z: "f" },
     };
 
-    const result = parseWithMeta(schema, input);
-    expect(result.meta.chosenName).toBe("ExactMatch");
+    const result = parseWithDiagnostics(schema, input);
+    expect(getUnionSelection(result.diagnostics)?.chosenName).toBe(
+      "ExactMatch"
+    );
   });
 });
 
@@ -1841,13 +1864,13 @@ describe("readme examples", () => {
       expect(result.user).toEqual({ id: "u_123", email: "new@example.com" });
     });
 
-    test("parseWithMeta returns correct chosen name", () => {
-      const { value, meta } = parseWithMeta(WebhookEvent, {
+    test("parseWithDiagnostics returns correct chosen name", () => {
+      const { value, diagnostics } = parseWithDiagnostics(WebhookEvent, {
         type: "invoice.paid",
         invoiceId: "inv_123",
         amount: 99.99,
       });
-      expect(meta.chosenName).toBe("InvoicePaid");
+      expect(getUnionSelection(diagnostics)?.chosenName).toBe("InvoicePaid");
       expect(value.type).toBe("invoice.paid");
     });
   });
@@ -1968,18 +1991,18 @@ describe("readme examples", () => {
     const Schema = union(A, B);
 
     test("selects B based on nested bar field", () => {
-      const { value, meta } = parseWithMeta(Schema, {
+      const { value, diagnostics } = parseWithDiagnostics(Schema, {
         inner: { bar: "hello" },
       });
-      expect(meta.chosenName).toBe("B");
+      expect(getUnionSelection(diagnostics)?.chosenName).toBe("B");
       expect(value.inner.bar).toBe("hello");
     });
 
     test("selects A based on nested foo field", () => {
-      const { value, meta } = parseWithMeta(Schema, {
+      const { value, diagnostics } = parseWithDiagnostics(Schema, {
         inner: { foo: "world" },
       });
-      expect(meta.chosenName).toBe("A");
+      expect(getUnionSelection(diagnostics)?.chosenName).toBe("A");
       expect(value.inner.foo).toBe("world");
     });
   });
@@ -1990,24 +2013,33 @@ describe("readme examples", () => {
       object({ type: literal("scroll"), delta: number() }, "Scroll")
     );
 
-    test("meta contains chosenIndex", () => {
-      const { meta } = parseWithMeta(Event, { type: "scroll", delta: 100 });
-      expect(meta.chosenIndex).toBe(1);
+    test("diagnostics contains chosenIndex", () => {
+      const { diagnostics } = parseWithDiagnostics(Event, {
+        type: "scroll",
+        delta: 100,
+      });
+      expect(getUnionSelection(diagnostics)?.chosenIndex).toBe(1);
     });
 
-    test("meta contains chosenName", () => {
-      const { meta } = parseWithMeta(Event, { type: "click", x: 10, y: 20 });
-      expect(meta.chosenName).toBe("Click");
+    test("diagnostics contains chosenName", () => {
+      const { diagnostics } = parseWithDiagnostics(Event, {
+        type: "click",
+        x: 10,
+        y: 20,
+      });
+      expect(getUnionSelection(diagnostics)?.chosenName).toBe("Click");
     });
 
-    test("meta contains candidates array", () => {
-      const { meta } = parseWithMeta(Event, { type: "click", x: 10, y: 20 });
-      expect(meta.candidates).toBeInstanceOf(Array);
-      expect(meta.candidates.length).toBe(2);
-      expect(meta.candidates[0]!.name).toBe("Click");
-      expect(meta.candidates[0]!.score).toBeGreaterThan(
-        meta.candidates[1]!.score
-      );
+    test("diagnostics contains union_selection diagnostic", () => {
+      const { diagnostics } = parseWithDiagnostics(Event, {
+        type: "click",
+        x: 10,
+        y: 20,
+      });
+      const selection = getUnionSelection(diagnostics);
+      expect(selection).toBeDefined();
+      expect(selection?.chosenName).toBe("Click");
+      expect(selection?.reason).toBe("exact match");
     });
   });
 
@@ -2354,21 +2386,21 @@ describe("field schema - union discrimination", () => {
     );
     const Payment = union(Card, Bank);
 
-    const cardResult = parseWithMeta(Payment, {
+    const cardResult = parseWithDiagnostics(Payment, {
       payment_type: "card",
       last_four: "4242",
     });
-    expect(cardResult.meta.chosenName).toBe("Card");
+    expect(getUnionSelection(cardResult.diagnostics)?.chosenName).toBe("Card");
     expect(cardResult.value).toEqual({
       paymentType: "card",
       lastFour: "4242",
     });
 
-    const bankResult = parseWithMeta(Payment, {
+    const bankResult = parseWithDiagnostics(Payment, {
       payment_type: "bank",
       account_number: "12345678",
     });
-    expect(bankResult.meta.chosenName).toBe("Bank");
+    expect(getUnionSelection(bankResult.diagnostics)?.chosenName).toBe("Bank");
     expect(bankResult.value).toEqual({
       paymentType: "bank",
       accountNumber: "12345678",
@@ -2392,12 +2424,15 @@ describe("field schema - union discrimination", () => {
     );
     const Schema = union(TypeA, TypeB);
 
-    const resultA = parseWithMeta(Schema, { kind: "a", value_a: "test" });
-    expect(resultA.meta.chosenName).toBe("TypeA");
+    const resultA = parseWithDiagnostics(Schema, {
+      kind: "a",
+      value_a: "test",
+    });
+    expect(getUnionSelection(resultA.diagnostics)?.chosenName).toBe("TypeA");
     expect(resultA.value).toEqual({ kind: "a", valueA: "test" });
 
-    const resultB = parseWithMeta(Schema, { kind: "b", valueB: "test" });
-    expect(resultB.meta.chosenName).toBe("TypeB");
+    const resultB = parseWithDiagnostics(Schema, { kind: "b", valueB: "test" });
+    expect(getUnionSelection(resultB.diagnostics)?.chosenName).toBe("TypeB");
     expect(resultB.value).toEqual({ kind: "b", valueB: "test" });
   });
 });
