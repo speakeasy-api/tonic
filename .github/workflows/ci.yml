@@ -87,8 +87,7 @@ jobs:
           VERSION=$(bun -p "require('./package.json').version")
 
           # TODO: Replace with `bun publish` when OIDC is supported
-          # https://github.com/oven-sh/bun/issues/15601
-          npm publish --provenance --access public
+          npm publish
 
           # Commit and tag
           git add package.json
