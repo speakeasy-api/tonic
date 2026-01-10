@@ -71,6 +71,7 @@ jobs:
         if: steps.release.outputs.should_release == 'true'
         env:
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          XDG_CONFIG_HOME: ${{ github.workspace }}
         run: |
           # Configure git
           git config user.name "github-actions[bot]"
