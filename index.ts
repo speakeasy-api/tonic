@@ -330,10 +330,34 @@ export interface $TonicArray<Element extends $TonicType = $TonicType> {
 
 type ObjectShape = Record<string, any>;
 
+// Detect readonly keys (getter-only properties) using type equality check
+type IfEquals<X, Y, A, B> = (<T>() => T extends X ? 1 : 2) extends <
+  T
+>() => T extends Y ? 1 : 2
+  ? A
+  : B;
+
+type ReadonlyKeys<T> = {
+  [K in keyof T]-?: IfEquals<
+    { [Q in K]: T[K] },
+    { -readonly [Q in K]: T[K] },
+    never,
+    K
+  >;
+}[keyof T];
+
+type IsOptionalKey<T extends ObjectShape, K extends keyof T> =
+  | (T[K] extends OptionalSchema ? K : never)
+  | (K extends ReadonlyKeys<T> ? K : never);
+
 type InferObjectOutput<T extends ObjectShape> = {
-  [K in keyof T as T[K] extends OptionalSchema ? never : K]: $Output<T[K]>;
+  -readonly [K in keyof T as K extends IsOptionalKey<T, K>
+    ? never
+    : K]: $Output<T[K]>;
 } & {
-  [K in keyof T as T[K] extends OptionalSchema ? K : never]?: $Output<T[K]>;
+  -readonly [K in keyof T as K extends IsOptionalKey<T, K>
+    ? K
+    : never]?: $Output<T[K]>;
 } & Record<string, unknown>;
 
 export interface $TonicObject<Shape extends ObjectShape = ObjectShape> {
@@ -356,6 +380,10 @@ interface NullableSchema<T = unknown> extends Schema<T | null> {
   _nullable: true;
 }
 
+function isGetter<T>(obj: T, key: keyof T) {
+  return typeof Object.getOwnPropertyDescriptor(obj, key)?.get === "function";
+}
+
 export function object<T extends ObjectShape>(
   shape: T,
   name?: string
@@ -364,10 +392,7 @@ export function object<T extends ObjectShape>(
     const defaultVal = {} as InferObject<T>;
     for (const key in shape) {
       // Skip getters - they're deferred for recursive schemas
-      if (
-        typeof Object.getOwnPropertyDescriptor(shape, key)?.get === "function"
-      )
-        continue;
+      if (isGetter(shape, key)) continue;
       const propSchema = shape[key]!;
       if (!("_optional" in propSchema)) {
         (defaultVal as Record<string, unknown>)[key] = propSchema._default;
@@ -376,7 +401,7 @@ export function object<T extends ObjectShape>(
     return defaultVal;
   };
 
-  const parse = (value: unknown): InternalResult<InferObject<T>> => {
+  function parseObject(value: unknown): InternalResult<InferObject<T>> {
     const isObj = isPlainObject(value);
     const {
       __proto__: _,
@@ -403,18 +428,20 @@ export function object<T extends ObjectShape>(
         delete input[fromKey];
       }
 
-      if ("_optional" in propSchema && propValue === undefined) {
+      // Getter-defined fields are treated as optional to prevent infinite recursion
+      const isOptional = "_optional" in propSchema || isGetter(shape, key);
+
+      if (isOptional && propValue === undefined) {
         delete input[key];
       } else {
         const fieldPresent = isObj && fromKey in value;
 
         if (fieldPresent) {
           totalScore += S_FIELD_PRESENT;
-        } else if (!("_optional" in propSchema)) {
+        } else if (!isOptional) {
           totalScore += S_FIELD_MISSING;
         }
 
-        // Parse the field
         const fieldResult = propSchema(propValue);
         input[key] = fieldResult.value;
 
@@ -459,9 +486,9 @@ export function object<T extends ObjectShape>(
       isObj,
       diagnostics
     );
-  };
+  }
 
-  const schema = parse as unknown as $TonicObject<T>;
+  const schema = parseObject as unknown as $TonicObject<T>;
   schema._output = null as unknown as InferObjectOutput<T>;
   schema._kind = "object";
   schema._shape = shape;
@@ -472,7 +499,7 @@ export function object<T extends ObjectShape>(
 
 export function array<T extends $TonicType>(element: T): $TonicArray<T> {
   type ElementOutput = $Output<T>;
-  const parse = (value: unknown): InternalResult<ElementOutput[]> => {
+  function parseArray(value: unknown): InternalResult<ElementOutput[]> {
     if (!Array.isArray(value)) {
       if (value === undefined || value === null)
         return result([] as ElementOutput[], 0, false, false, [
@@ -498,9 +525,9 @@ export function array<T extends $TonicType>(element: T): $TonicArray<T> {
       return e.value as ElementOutput;
     });
     return result(r, s, x, true, d);
-  };
+  }
 
-  const schema = parse as unknown as $TonicArray<T>;
+  const schema = parseArray as unknown as $TonicArray<T>;
   schema._kind = "array";
   schema._output = null as unknown as ElementOutput[];
   schema._default = [] as ElementOutput[];
@@ -509,27 +536,31 @@ export function array<T extends $TonicType>(element: T): $TonicArray<T> {
 }
 
 export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
-  const parse = (value: unknown): InternalResult<Infer<T> | undefined> => {
+  function parseOptional(value: unknown): InternalResult<Infer<T> | undefined> {
     if (value === undefined)
       return result(undefined, S_EXACT_TYPE, false, true, NO_DIAGNOSTICS);
     return inner(value) as InternalResult<Infer<T> | undefined>;
-  };
-  const schema = createSchema("optional", undefined, parse) as OptionalSchema<
-    Infer<T>
-  >;
+  }
+  const schema = createSchema(
+    "optional",
+    undefined,
+    parseOptional
+  ) as OptionalSchema<Infer<T>>;
   schema._optional = true;
   return schema;
 }
 
 export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
-  const parse = (value: unknown): InternalResult<Infer<T> | null> => {
+  function parseNullable(value: unknown): InternalResult<Infer<T> | null> {
     if (value === null || value === undefined)
       return result(null, S_NULL_MATCH, value === null, true, NO_DIAGNOSTICS);
     return inner(value) as InternalResult<Infer<T> | null>;
-  };
-  const schema = createSchema("nullable", null, parse) as NullableSchema<
-    Infer<T>
-  >;
+  }
+  const schema = createSchema(
+    "nullable",
+    null,
+    parseNullable
+  ) as NullableSchema<Infer<T>>;
   schema._nullable = true;
   return schema;
 }
@@ -574,7 +605,7 @@ export function union<T extends NonEmptyArray<Schema>>(
   const keyCounts = computeKeyCounts(schemas);
   const defaultVal = schemas[0]!._default as Infer<T[number]>;
 
-  const parse = (value: unknown): InternalResult<Infer<T[number]>> => {
+  function parseUnion(value: unknown): InternalResult<Infer<T[number]>> {
     let best: InternalResult<Infer<T[number]>> | undefined,
       idx = 0,
       name: string | undefined;
@@ -613,9 +644,9 @@ export function union<T extends NonEmptyArray<Schema>>(
     for (let j = 0; j < best.diagnostics.length; j++)
       d.push(best.diagnostics[j]!);
     return result(best.value, best.score, best.exactMatch, best.typeMatch, d);
-  };
+  }
 
-  const schema = createSchema("union", defaultVal, parse) as Schema<
+  const schema = createSchema("union", defaultVal, parseUnion) as Schema<
     Infer<T[number]>
   > & { _schemas: T };
   schema._schemas = schemas;
@@ -630,9 +661,5 @@ export function parseWithDiagnostics<T extends Schema>(
   schema: T,
   value: unknown
 ): ParseResult<Infer<T>> {
-  const result = schema(value);
-  return {
-    value: result.value as Infer<T>,
-    diagnostics: result.diagnostics,
-  };
+  return schema(value);
 }

@@ -2829,4 +2829,77 @@ describe("type resolution", () => {
       },
     });
   });
+  test("recursive default chain breaks on getter-defined field", () => {
+    const Account = object({
+      id: string(),
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const User = object({
+      id: string(),
+      account: Account,
+      get profile() {
+        return Profile;
+      },
+    });
+    const Profile = object({
+      id: string(),
+      account: Account,
+      user: User,
+    });
+
+    const out = parse(Profile, {});
+
+    expect(out).toMatchObject({
+      id: "",
+      account: {
+        id: "",
+        firstName: "",
+      },
+      user: {
+        id: "",
+        account: {
+          id: "",
+          firstName: "",
+        },
+      },
+    });
+  });
+
+  test("getter-defined fields are typed as optional", () => {
+    const B = object({ name: string() });
+    const A = object({
+      id: string(),
+      get b() {
+        return B;
+      },
+    });
+
+    type AType = Infer<typeof A>;
+
+    // Type-level assertions: 'id' is required, 'b' is optional
+    const _checkRequired: AType["id"] = "" as string;
+    const _checkOptional: AType["b"] = undefined;
+
+    // Runtime check
+    const out = parse(A, {});
+    expect(out).toEqual({ id: "" });
+    expect(out.b).toBeUndefined();
+  });
+
+  test("getter-defined fields are writable on output type", () => {
+    const B = object({ name: string() });
+    const A = object({
+      id: string(),
+      get b() {
+        return B;
+      },
+    });
+
+    const out = parse(A, {});
+
+    // Even though 'b' is defined via getter (readonly in schema),
+    // the output type should be writable
+    out.b = { name: "test" };
+    expect(out.b).toEqual({ name: "test" });
+  });
 });
