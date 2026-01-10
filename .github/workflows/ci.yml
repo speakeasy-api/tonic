@@ -70,14 +70,11 @@ jobs:
       - name: Bump version and publish
         if: steps.release.outputs.should_release == 'true'
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Configure npm auth
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
 
           # Bump version
           bun pm version ${{ steps.release.outputs.bump }} --no-git-tag-version
