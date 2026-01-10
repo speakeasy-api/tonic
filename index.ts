@@ -145,14 +145,29 @@ function makeDiag<K extends DiagnosticKind>(
   return { kind, path: path ? [path] : [], details } as Diagnostic;
 }
 
-export type Schema<T = unknown> = {
-  (value: unknown): InternalResult<T>;
-  _output: T;
-  _kind: string;
-  _default: T;
-};
+interface $Tonic<O = unknown> {
+  output: O;
+  default: O;
+}
 
-export type Infer<T extends Schema> = DeepPrettify<T["_output"]>;
+export interface $TonicType<Internals extends $Tonic = $Tonic> {
+  (value: unknown): InternalResult<any>;
+  _tonic: Internals;
+  _kind: string;
+  _output: any;
+  _default: any;
+}
+
+type $Output<T> = T extends $TonicObject<infer S>
+  ? InferObjectOutput<S>
+  : T extends $TonicArray<infer E>
+  ? $Output<E>[]
+  : T extends $TonicType<infer I>
+  ? I["output"]
+  : unknown;
+
+export type Schema<T = unknown> = $TonicType<$Tonic<T>>;
+export type Infer<T extends $TonicType> = DeepPrettify<$Output<T>>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -304,12 +319,34 @@ export function literal<T extends Primitive>(
   return schema;
 }
 
-type ObjectShape = Record<string, Schema>;
-type InferObject<T extends ObjectShape> = {
-  [K in keyof T as T[K] extends OptionalSchema ? never : K]: Infer<T[K]>;
+export interface $TonicArray<Element extends $TonicType = $TonicType> {
+  (value: unknown): InternalResult<any>;
+  _tonic: $Tonic;
+  _kind: "array";
+  _element: Element;
+  _output: any;
+  _default: any;
+}
+
+type ObjectShape = Record<string, any>;
+
+type InferObjectOutput<T extends ObjectShape> = {
+  [K in keyof T as T[K] extends OptionalSchema ? never : K]: $Output<T[K]>;
 } & {
-  [K in keyof T as T[K] extends OptionalSchema ? K : never]?: Infer<T[K]>;
+  [K in keyof T as T[K] extends OptionalSchema ? K : never]?: $Output<T[K]>;
 } & Record<string, unknown>;
+
+export interface $TonicObject<Shape extends ObjectShape = ObjectShape> {
+  (value: unknown): InternalResult<any>;
+  _tonic: $Tonic;
+  _kind: "object";
+  _shape: Shape;
+  _name?: string;
+  _output: any;
+  _default: any;
+}
+
+type InferObject<T extends ObjectShape> = InferObjectOutput<T>;
 
 interface OptionalSchema<T = unknown> extends Schema<T | undefined> {
   _optional: true;
@@ -322,18 +359,24 @@ interface NullableSchema<T = unknown> extends Schema<T | null> {
 export function object<T extends ObjectShape>(
   shape: T,
   name?: string
-): Schema<InferObject<T>> & { _shape: T; _name?: string } {
-  const defaultVal = {} as InferObject<T>;
-
-  for (const key in shape) {
-    const propSchema = shape[key]!;
-    if (!("_optional" in propSchema)) {
-      (defaultVal as Record<string, unknown>)[key] = propSchema._default;
+): $TonicObject<T> {
+  const getDefaultVal = (): InferObject<T> => {
+    const defaultVal = {} as InferObject<T>;
+    for (const key in shape) {
+      // Skip getters - they're deferred for recursive schemas
+      if (
+        typeof Object.getOwnPropertyDescriptor(shape, key)?.get === "function"
+      )
+        continue;
+      const propSchema = shape[key]!;
+      if (!("_optional" in propSchema)) {
+        (defaultVal as Record<string, unknown>)[key] = propSchema._default;
+      }
     }
-  }
+    return defaultVal;
+  };
 
   const parse = (value: unknown): InternalResult<InferObject<T>> => {
-    // Cache isPlainObject result
     const isObj = isPlainObject(value);
     const {
       __proto__: _,
@@ -363,7 +406,6 @@ export function object<T extends ObjectShape>(
       if ("_optional" in propSchema && propValue === undefined) {
         delete input[key];
       } else {
-        // Check if field is present in input (use cached isObj)
         const fieldPresent = isObj && fromKey in value;
 
         if (fieldPresent) {
@@ -389,9 +431,10 @@ export function object<T extends ObjectShape>(
           totalScore += fieldResult.score;
         }
 
-        // Check for literal discriminators
         if ("_literal" in propSchema) {
-          const literalSchema = propSchema as Schema & { _literal: Primitive };
+          const literalSchema = propSchema as unknown as Schema & {
+            _literal: Primitive;
+          };
           if (propValue === literalSchema._literal) {
             totalScore += S_DISCRIMINATOR_EXACT;
             hasExactDiscriminator = true;
@@ -402,7 +445,6 @@ export function object<T extends ObjectShape>(
           }
         }
 
-        // Append nested diagnostics
         prependPath(fieldResult.diagnostics, key);
         for (let j = 0; j < fieldResult.diagnostics.length; j++)
           diagnostics.push(fieldResult.diagnostics[j]!);
@@ -419,20 +461,21 @@ export function object<T extends ObjectShape>(
     );
   };
 
-  const schema = createSchema("object", defaultVal, parse) as Schema<
-    InferObject<T>
-  > & { _shape: T; _name?: string };
-
+  const schema = parse as unknown as $TonicObject<T>;
+  schema._output = null as unknown as InferObjectOutput<T>;
+  schema._kind = "object";
   schema._shape = shape;
   schema._name = name;
+  schema._default = getDefaultVal();
   return schema;
 }
 
-export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
-  const parse = (value: unknown): InternalResult<Infer<T>[]> => {
+export function array<T extends $TonicType>(element: T): $TonicArray<T> {
+  type ElementOutput = $Output<T>;
+  const parse = (value: unknown): InternalResult<ElementOutput[]> => {
     if (!Array.isArray(value)) {
       if (value === undefined || value === null)
-        return result([], 0, false, false, [
+        return result([] as ElementOutput[], 0, false, false, [
           makeDiag("default", { schema: "array", value: [] }),
         ]);
       const e = element(value);
@@ -441,7 +484,7 @@ export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
         makeDiag("array_wrap", { valueType: typeof value }),
       ];
       for (let j = 0; j < e.diagnostics.length; j++) d.push(e.diagnostics[j]!);
-      return result([e.value as Infer<T>], e.score, false, false, d);
+      return result([e.value as ElementOutput], e.score, false, false, d);
     }
     let s = S_ARRAY_MATCH,
       x = true;
@@ -452,11 +495,17 @@ export function array<T extends Schema>(element: T): Schema<Infer<T>[]> {
       if (!e.exactMatch) x = false;
       prependPath(e.diagnostics, i);
       for (let j = 0; j < e.diagnostics.length; j++) d.push(e.diagnostics[j]!);
-      return e.value as Infer<T>;
+      return e.value as ElementOutput;
     });
     return result(r, s, x, true, d);
   };
-  return createSchema("array", [] as Infer<T>[], parse);
+
+  const schema = parse as unknown as $TonicArray<T>;
+  schema._kind = "array";
+  schema._output = null as unknown as ElementOutput[];
+  schema._default = [] as ElementOutput[];
+  schema._element = element;
+  return schema;
 }
 
 export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {

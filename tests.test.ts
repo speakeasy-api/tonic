@@ -16,6 +16,7 @@ import {
   type Infer,
   type Diagnostic,
   type UnionSelectionDetails,
+  type Schema,
 } from "./index";
 
 // Helper to get union selection details from diagnostics
@@ -2717,5 +2718,115 @@ describe("field schema - real world scenarios", () => {
       enableLogging: true,
     });
     expect("apiKey" in result).toBe(false);
+  });
+});
+
+describe("type resolution", () => {
+  test("simply recursive type appeases TSC", () => {
+    const Account = object({
+      id: string(),
+      firstName: field(string(), { from: "first_name" }),
+      get contacts() {
+        return array(Account);
+      },
+    });
+
+    const result = parse(Account, {
+      id: "acc_1",
+      first_name: "Alice",
+      contacts: [
+        {
+          id: "acc_2",
+          first_name: "Bob",
+          contacts: [
+            {
+              id: "acc_3",
+              first_name: "Charlie",
+              contacts: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      id: "acc_1",
+      firstName: "Alice",
+      contacts: [
+        {
+          id: "acc_2",
+          firstName: "Bob",
+          contacts: [
+            {
+              id: "acc_3",
+              firstName: "Charlie",
+              contacts: [],
+            },
+          ],
+        },
+      ],
+    });
+  });
+  test("deeply nested recursive type appeases TSC", () => {
+    const Outgoing = object({
+      id: string(),
+      get createdBy() {
+        return User;
+      },
+    });
+    const BillingDetails = object({
+      id: string(),
+      outgoings: array(Outgoing),
+    });
+    const Account = object({
+      id: string(),
+      firstName: field(string(), { from: "first_name" }),
+      billingDetails: BillingDetails,
+    });
+    const User = object({
+      id: string(),
+      account: Account,
+    });
+
+    const out = parse(Account, {
+      id: "acc_123",
+      first_name: "Test",
+      billingDetails: {
+        id: "bd_123",
+        outgoings: [
+          {
+            id: "out_123",
+            createdBy: {
+              id: "usr_123",
+              account: {
+                id: "acc_456",
+                first_name: "Nested",
+                billingDetails: { id: "bd_nested", outgoings: [] },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(out).toMatchObject({
+      id: "acc_123",
+      firstName: "Test",
+      billingDetails: {
+        id: "bd_123",
+        outgoings: [
+          {
+            id: "out_123",
+            createdBy: {
+              id: "usr_123",
+              account: {
+                id: "acc_456",
+                firstName: "Nested",
+              },
+            },
+          },
+        ],
+      },
+    });
   });
 });
