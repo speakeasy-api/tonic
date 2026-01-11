@@ -166,7 +166,38 @@ type $Output<T> = T extends $TonicObject<infer S>
   ? I["output"]
   : unknown;
 
+/**
+ * A schema definition that parses and coerces values to type `T`.
+ *
+ * Schemas are callable functions that return an internal result with the
+ * coerced value, score (for union discrimination), and diagnostics.
+ *
+ * @template T - The output type this schema produces
+ *
+ * @example
+ * ```ts
+ * const mySchema: Schema<string> = string();
+ * ```
+ */
 export type Schema<T = unknown> = $TonicType<$Tonic<T>>;
+
+/**
+ * Extracts the TypeScript type that a schema will produce after parsing.
+ *
+ * @template T - A schema type to infer from
+ *
+ * @example
+ * ```ts
+ * const UserSchema = object({
+ *   id: number(),
+ *   name: string(),
+ *   tags: array(string()),
+ * });
+ *
+ * type User = Infer<typeof UserSchema>;
+ * // { id: number; name: string; tags: string[] }
+ * ```
+ */
 export type Infer<T extends $TonicType> = DeepPrettify<$Output<T>>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -187,6 +218,27 @@ function createSchema<T>(
   return schema;
 }
 
+/**
+ * Creates a schema that coerces values to strings.
+ *
+ * Coercion rules:
+ *
+ * - `string` → passed through unchanged
+ * - `number`, `boolean` → converted via `String()`
+ * - `null`, `undefined` → returns default (`""`)
+ * - `object`, `array` → JSON stringified
+ *
+ * @returns A schema that produces `string` values
+ *
+ * @example
+ * ```ts
+ * parse(string(), "hello");     // "hello"
+ * parse(string(), 42);          // "42"
+ * parse(string(), true);        // "true"
+ * parse(string(), null);        // ""
+ * parse(string(), { a: 1 });    // '{"a":1}'
+ * ```
+ */
 export function string(): Schema<string> {
   const parse = (value: unknown): InternalResult<string> => {
     const d = (parse as Schema<string>)._default;
@@ -208,6 +260,27 @@ export function string(): Schema<string> {
   return createSchema("string", "", parse);
 }
 
+/**
+ * Creates a schema that coerces values to numbers.
+ *
+ * Coercion rules:
+ * - `number` → passed through unchanged (except `NaN` → default)
+ * - `string` → parsed via unary `+` (non-numeric strings → default)
+ * - `boolean` → `true` becomes `1`, `false` becomes `0`
+ * - `null`, `undefined` → returns default (`0`)
+ *
+ * @returns A schema that produces `number` values
+ *
+ * @example
+ * ```ts
+ * parse(number(), 42);        // 42
+ * parse(number(), "123");     // 123
+ * parse(number(), "3.14");    // 3.14
+ * parse(number(), true);      // 1
+ * parse(number(), "hello");   // 0 (non-numeric string)
+ * parse(number(), null);      // 0
+ * ```
+ */
 export function number(): Schema<number> {
   const parse = (value: unknown): InternalResult<number> => {
     const d = (parse as Schema<number>)._default;
@@ -239,6 +312,30 @@ export function number(): Schema<number> {
   return createSchema("number", 0, parse);
 }
 
+/**
+ * Creates a schema that coerces values to booleans.
+ *
+ * Coercion rules:
+ *
+ * - `boolean` → passed through unchanged
+ * - `"false"` (string) → `false` (special case)
+ * - `0` → `false`
+ * - `null`, `undefined` → returns default (`false`)
+ * - All other truthy values → `true`
+ *
+ * @returns A schema that produces `boolean` values
+ *
+ * @example
+ * ```ts
+ * parse(boolean(), true);      // true
+ * parse(boolean(), false);     // false
+ * parse(boolean(), "false");   // false (special case)
+ * parse(boolean(), "true");    // true
+ * parse(boolean(), 1);         // true
+ * parse(boolean(), 0);         // false
+ * parse(boolean(), null);      // false
+ * ```
+ */
 export function boolean(): Schema<boolean> {
   const parse = (value: unknown): InternalResult<boolean> => {
     const d = (parse as Schema<boolean>)._default;
@@ -265,14 +362,49 @@ export function boolean(): Schema<boolean> {
   return createSchema("boolean", false, parse);
 }
 
-type Primitive = string | number | boolean;
+type Primitive = string | number | boolean | null;
 
 type LiteralOutput<T extends Primitive> = T extends string
   ? T | (string & {})
   : T extends number
   ? T | (number & {})
+  : T extends null
+  ? T | (null & {})
   : T | (boolean & {});
 
+/**
+ * Creates a schema for a specific literal value.
+ *
+ * Unlike strict validation, this schema accepts any value of the same base type
+ * but tracks whether it was an exact match (used for union discrimination).
+ * The output type is widened to allow other values of the same type to pass through.
+ *
+ * How it works:
+ *
+ * - Exact match → value passed through, high discrimination score
+ * - Same type, different value → value passed through (e.g., `"other"` for `literal("expected")`)
+ * - Different type → coerced via the base type schema
+ * - `null`, `undefined` → returns the literal as default
+ *
+ * @template T - The literal primitive type (`string`, `number`, or `boolean`)
+ * @param expected - The expected literal value
+ * @returns A schema that produces the literal type (widened to base type)
+ *
+ * @example
+ * ```ts
+ * const Status = literal("active");
+ *
+ * parse(Status, "active");    // "active" (exact match)
+ * parse(Status, "inactive");  // "inactive" (same type, preserved)
+ * parse(Status, null);        // "active" (default)
+ *
+ * // Commonly used with union() for discriminated unions:
+ * const Event = union(
+ *   object({ type: literal("click"), x: number(), y: number() }),
+ *   object({ type: literal("keypress"), key: string() })
+ * );
+ * ```
+ */
 export function literal<T extends Primitive>(
   expected: T
 ): Schema<LiteralOutput<T>> & { _literal: T } {
@@ -384,6 +516,52 @@ function isGetter<T>(obj: T, key: keyof T) {
   return typeof Object.getOwnPropertyDescriptor(obj, key)?.get === "function";
 }
 
+/**
+ * Creates a schema for objects with a defined shape.
+ *
+ * How it works:
+ *
+ * - **Unknown keys preserved**: extra properties not in the shape pass through unchanged
+ * - **Missing fields**: filled with each field's default value
+ * - **Non-objects**: coerced to an object with all defaults
+ * - **Recursive support**: use getter syntax for self-referential schemas
+ *
+ * For union discrimination, literal fields act as discriminators and influence
+ * which union branch is selected.
+ *
+ * @template T - The shape definition (record of property names to schemas)
+ * @param shape - An object mapping property names to their schemas
+ * @param name - Optional name for debugging and union discrimination diagnostics
+ * @returns A schema that produces objects matching the shape
+ *
+ * @example
+ * ```ts
+ * const User = object({
+ *   id: number(),
+ *   name: string(),
+ *   email: optional(string()),
+ * });
+ *
+ * parse(User, { id: 1, name: "Alice" });
+ * // { id: 1, name: "Alice" }
+ *
+ * parse(User, { id: "123", name: "Bob", extra: true });
+ * // { id: 123, name: "Bob", extra: true }  (coerced id, preserved extra)
+ *
+ * parse(User, null);
+ * // { id: 0, name: "" }  (all defaults)
+ * ```
+ *
+ * @example Recursive schemas
+ * ```ts
+ * type Category = { name: string; parent?: Category };
+ *
+ * const CategorySchema = typed<Category>(object({
+ *   name: string(),
+ *   get parent() { return optional(CategorySchema); }
+ * }));
+ * ```
+ */
 export function object<T extends ObjectShape>(
   shape: T,
   name?: string
@@ -497,6 +675,36 @@ export function object<T extends ObjectShape>(
   return schema;
 }
 
+/**
+ * Creates a schema for arrays where each element matches the given schema.
+ *
+ * Coercion rules:
+ *
+ * - `array` → each element parsed through the element schema
+ * - `null`, `undefined` → returns empty array `[]`
+ * - Any other value → wrapped in a single-element array and parsed
+ *
+ * This "wrap single values" behavior is useful for APIs that sometimes return
+ * a single item instead of an array.
+ *
+ * @template T - The element schema type
+ * @param element - Schema to apply to each array element
+ * @returns A schema that produces arrays of the element type
+ *
+ * @example
+ * ```ts
+ * const Tags = array(string());
+ *
+ * parse(Tags, ["a", "b", "c"]);  // ["a", "b", "c"]
+ * parse(Tags, "single");         // ["single"] (wrapped)
+ * parse(Tags, [1, 2, 3]);        // ["1", "2", "3"] (coerced)
+ * parse(Tags, null);             // []
+ *
+ * // Nested arrays
+ * const Matrix = array(array(number()));
+ * parse(Matrix, [[1, 2], [3, 4]]);  // [[1, 2], [3, 4]]
+ * ```
+ */
 export function array<T extends $TonicType>(element: T): $TonicArray<T> {
   type ElementOutput = $Output<T>;
   function parseArray(value: unknown): InternalResult<ElementOutput[]> {
@@ -535,6 +743,34 @@ export function array<T extends $TonicType>(element: T): $TonicArray<T> {
   return schema;
 }
 
+/**
+ * Wraps a schema to make its field optional (`T | undefined`).
+ *
+ * When used in an object schema, the key is **omitted from the output**
+ * when the value is `undefined`. This differs from `nullable()` which
+ * keeps the key with a `null` value.
+ *
+ * @template T - The inner schema type
+ * @param inner - The schema to wrap
+ * @returns An optional schema that allows `undefined`
+ *
+ * @example
+ * ```ts
+ * const Profile = object({
+ *   name: string(),
+ *   bio: optional(string()),
+ * });
+ *
+ * parse(Profile, { name: "Alice" });
+ * // { name: "Alice" }  (bio key omitted)
+ *
+ * parse(Profile, { name: "Alice", bio: "Hello" });
+ * // { name: "Alice", bio: "Hello" }
+ *
+ * parse(Profile, { name: "Alice", bio: undefined });
+ * // { name: "Alice" }  (bio key omitted)
+ * ```
+ */
 export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
   function parseOptional(value: unknown): InternalResult<Infer<T> | undefined> {
     if (value === undefined)
@@ -550,6 +786,34 @@ export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
   return schema;
 }
 
+/**
+ * Wraps a schema to make its field nullable (`T | null`).
+ *
+ * When the value is `null` or `undefined`, returns `null`.
+ * Unlike `optional()`, the key is always **present in the output** with
+ * either the parsed value or `null`.
+ *
+ * @template T - The inner schema type
+ * @param inner - The schema to wrap
+ * @returns A nullable schema that allows `null`
+ *
+ * @example
+ * ```ts
+ * const Profile = object({
+ *   name: string(),
+ *   avatar: nullable(string()),
+ * });
+ *
+ * parse(Profile, { name: "Alice" });
+ * // { name: "Alice", avatar: null }  (key present)
+ *
+ * parse(Profile, { name: "Alice", avatar: "pic.jpg" });
+ * // { name: "Alice", avatar: "pic.jpg" }
+ *
+ * parse(Profile, { name: "Alice", avatar: null });
+ * // { name: "Alice", avatar: null }
+ * ```
+ */
 export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
   function parseNullable(value: unknown): InternalResult<Infer<T> | null> {
     if (value === null || value === undefined)
@@ -572,6 +836,43 @@ interface FieldSchema<T = unknown> extends Schema<T> {
 type FieldReturn<T extends Schema> = FieldSchema<Infer<T>> &
   (T extends OptionalSchema ? { _optional: true } : {});
 
+/**
+ * Wraps a schema with field-level options, primarily for key aliasing.
+ *
+ * Use the `from` option to read from a different input key than the output key.
+ * This is useful for mapping snake_case API responses to camelCase properties,
+ * or handling renamed/legacy field names.
+ *
+ * @template T - The inner schema type
+ * @param inner - The schema to wrap
+ * @param options - Field options
+ * @param options.from - Input key name to read from (output uses the object's key)
+ * @returns The wrapped schema with field options applied
+ *
+ * @example
+ * ```ts
+ * const User = object({
+ *   firstName: field(string(), { from: "first_name" }),
+ *   lastName: field(string(), { from: "last_name" }),
+ *   createdAt: field(string(), { from: "created_at" }),
+ * });
+ *
+ * parse(User, {
+ *   first_name: "Alice",
+ *   last_name: "Smith",
+ *   created_at: "2024-01-01"
+ * });
+ * // { firstName: "Alice", lastName: "Smith", createdAt: "2024-01-01" }
+ * ```
+ *
+ * @example With optional fields
+ * ```ts
+ * const Profile = object({
+ *   displayName: field(string(), { from: "display_name" }),
+ *   avatarUrl: field(optional(string()), { from: "avatar_url" }),
+ * });
+ * ```
+ */
 export function field<T extends Schema>(
   inner: T,
   options?: { from?: string }
@@ -595,6 +896,63 @@ function computeKeyCounts(schemas: Schema[]): Record<string, number> {
   return keyCounts;
 }
 
+/**
+ * Creates a schema for discriminated unions that selects the best-matching branch.
+ *
+ * Unlike strict union validation, tonic's union uses a scoring system to find
+ * the best structural match. This allows graceful handling of:
+ *
+ * - New enum values the client doesn't know about
+ * - Partial matches when API responses change
+ * - Polymorphic types without exact discriminator matches
+ *
+ * **Scoring system** (higher = better match):
+ *
+ * - Exact literal match: +200
+ * - Nullable schema + null value: +150
+ * - Type match (string/number/boolean/array): +80 to +100
+ * - Discriminator field matches exactly: +50
+ * - Required property present: +5
+ * - Property value matches expected type: +2
+ * - Input key exists in schema: +1
+ * - Required property missing: -10
+ * - Discriminator field has wrong type: -50
+ *
+ * @template T - Tuple of schema types in the union
+ * @param schemas - Two or more schemas to form the union
+ * @returns A schema that produces one of the union member types
+ *
+ * @example
+ * ```ts
+ * // Discriminated union with literal types
+ * const Event = union(
+ *   object({ type: literal("click"), x: number(), y: number() }),
+ *   object({ type: literal("keypress"), key: string() })
+ * );
+ *
+ * parse(Event, { type: "click", x: 10, y: 20 });
+ * // { type: "click", x: 10, y: 20 }
+ *
+ * parse(Event, { type: "keypress", key: "Enter" });
+ * // { type: "keypress", key: "Enter" }
+ *
+ * // Unknown type still works - picks best structural match
+ * parse(Event, { type: "scroll", x: 0, y: 100 });
+ * // { type: "scroll", x: 0, y: 100 }  (matches click structure)
+ * ```
+ *
+ * @example Open enums (union of literals)
+ * ```ts
+ * const Status = union(
+ *   literal("pending"),
+ *   literal("active"),
+ *   literal("archived")
+ * );
+ *
+ * parse(Status, "active");     // "active"
+ * parse(Status, "suspended");  // "suspended" (unknown value preserved)
+ * ```
+ */
 export function union<T extends NonEmptyArray<Schema>>(
   ...schemas: T
 ): Schema<Infer<T[number]>> & { _schemas: T } {
@@ -653,10 +1011,167 @@ export function union<T extends NonEmptyArray<Schema>>(
   return schema;
 }
 
+/**
+ * A schema type alias that preserves an explicit type annotation.
+ * Used as the return type of {@link typed}.
+ *
+ * @template T - The explicit output type
+ */
+export type TypedSchema<T> = Schema<T>;
+
+/**
+ * Explicitly types a schema, breaking TypeScript's circular inference.
+ *
+ * Use this helper when defining recursive/self-referential schemas where
+ * TypeScript cannot infer the type due to circular references. Combine with
+ * getter syntax in object shapes to defer schema resolution.
+ *
+ * @template T - The explicit type to assign to the schema
+ * @param schema - The schema to type (typically an `object()` call)
+ * @returns The same schema with the explicit type `T`
+ *
+ * @example
+ * ```ts
+ * // Define the recursive type first
+ * type TreeNode = {
+ *   value: string;
+ *   children: TreeNode[];
+ * };
+ *
+ * // Use typed<T>() with getter to break circular inference
+ * const TreeNodeSchema = typed<TreeNode>(object({
+ *   value: string(),
+ *   get children() { return array(TreeNodeSchema); }
+ * }));
+ *
+ * parse(TreeNodeSchema, {
+ *   value: "root",
+ *   children: [
+ *     { value: "child1", children: [] },
+ *     { value: "child2", children: [] }
+ *   ]
+ * });
+ * ```
+ *
+ * @example Optional self-reference
+ * ```ts
+ * type User = { id: string; manager?: User };
+ *
+ * const UserSchema = typed<User>(object({
+ *   id: string(),
+ *   get manager() { return optional(UserSchema); }
+ * }));
+ * ```
+ */
+export function typed<T>(schema: unknown): TypedSchema<T> {
+  return schema as TypedSchema<T>;
+}
+
+/**
+ * Creates a schema that accepts any value and passes it through unchanged.
+ *
+ * Use for dynamic data, metadata fields, or parts of an API response where
+ * you don't want to define a strict schema. The value is not coerced or
+ * validated in any way.
+ *
+ * @returns A schema that produces `unknown` (accepts anything)
+ *
+ * @example
+ * ```ts
+ * const Event = object({
+ *   type: string(),
+ *   payload: unknown(),  // accept any shape
+ * });
+ *
+ * parse(Event, { type: "click", payload: { x: 10, y: 20 } });
+ * // { type: "click", payload: { x: 10, y: 20 } }
+ *
+ * parse(Event, { type: "data", payload: [1, 2, 3] });
+ * // { type: "data", payload: [1, 2, 3] }
+ *
+ * parse(Event, { type: "simple", payload: "just a string" });
+ * // { type: "simple", payload: "just a string" }
+ * ```
+ */
+export function unknown(): Schema<unknown> {
+  const parse = (value: unknown): InternalResult<unknown> => {
+    return result(value, S_EXACT_TYPE, false, true, NO_DIAGNOSTICS);
+  };
+  return createSchema("unknown", undefined, parse);
+}
+
+/**
+ * Parses a value using the given schema and returns the coerced result.
+ *
+ * This function **never throws**. Invalid or missing data is coerced to
+ * valid defaults, making it safe to use with unpredictable API responses.
+ *
+ * @template T - The schema type
+ * @param schema - The schema to parse with
+ * @param value - The value to parse (typically from `JSON.parse` or API response)
+ * @returns The coerced value matching the schema's output type
+ *
+ * @example
+ * ```ts
+ * const User = object({ id: number(), name: string() });
+ *
+ * // Normal usage
+ * const user = parse(User, await res.json());
+ *
+ * // Handles type mismatches
+ * parse(User, { id: "123", name: "Alice" });
+ * // { id: 123, name: "Alice" }
+ *
+ * // Handles missing data
+ * parse(User, {});
+ * // { id: 0, name: "" }
+ *
+ * // Handles complete garbage
+ * parse(User, null);
+ * // { id: 0, name: "" }
+ * ```
+ */
 export function parse<T extends Schema>(schema: T, value: unknown): Infer<T> {
   return schema(value).value as Infer<T>;
 }
 
+/**
+ * Parses a value and returns both the coerced result and diagnostics.
+ *
+ * Use this when you need visibility into what coercions or defaults were applied.
+ * Useful for logging, debugging, or detecting when API responses don't match
+ * your expected schema.
+ *
+ * @template T - The schema type
+ * @param schema - The schema to parse with
+ * @param value - The value to parse
+ * @returns An object with `value` (the coerced result) and `diagnostics` (array of issues)
+ *
+ * @example
+ * ```ts
+ * const User = object({ id: number(), name: string() });
+ *
+ * const { value, diagnostics } = parseWithDiagnostics(User, {
+ *   id: "123",
+ *   name: null
+ * });
+ *
+ * // value: { id: 123, name: "" }
+ *
+ * // diagnostics:
+ * // [
+ * //   { kind: "coercion", path: ["id"], details: { from: "string", to: "number" } },
+ * //   { kind: "default", path: ["name"], details: { schema: "string", value: "" } }
+ * // ]
+ *
+ * // Log warnings for mismatches
+ * for (const d of diagnostics) {
+ *   if (d.kind === "coercion") {
+ *     console.warn(`Type mismatch at ${d.path.join(".")}`);
+ *   }
+ * }
+ * ```
+ */
 export function parseWithDiagnostics<T extends Schema>(
   schema: T,
   value: unknown

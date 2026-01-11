@@ -317,6 +317,48 @@ type User = Infer<typeof User>;
 // }
 ```
 
+### Cyclic / recursive types
+
+For self-referential schemas (like a `User` with a `manager` field that is also a `User`), use `typed<T>()` with getter syntax to break the circular inference:
+
+```typescript
+import { object, string, Infer } from "@speakeasy-api/tonic";
+
+const UserSchema = object({
+  id: string(),
+  name: string(),
+  get manager() {
+    return UserSchema;
+  },
+});
+
+parse(UserSchema, {
+  id: "1",
+  name: "Alice",
+  manager: { id: "2", name: "Bob" },
+});
+// → { id: "1", name: "Alice", manager: { id: "2", name: "Bob" } }
+
+type User = Infer<UserSchema>;
+```
+
+> [!NOTE]
+> Using a getter to define a field's type automatically makes it `optional`. This protects against infinite default value loops.
+
+### Accepting any value
+
+Use `unknown()` when you need to accept dynamic or untyped data:
+
+```typescript
+const Metadata = object({
+  id: string(),
+  data: unknown(), // accepts any value
+});
+
+parse(Metadata, { id: "123", data: { anything: "goes", nested: [1, 2, 3] } });
+// → { id: "123", data: { anything: "goes", nested: [1, 2, 3] } }
+```
+
 ## API
 
 ### Primitives
@@ -342,6 +384,13 @@ field(schema, { from: "key" }); // reads from aliased input key
 
 ```typescript
 union(schemaA, schemaB, ...)  // scored discrimination
+```
+
+### Utilities
+
+```typescript
+unknown(); // accepts any value, returns as-is
+typed<T>(schema); // explicitly type a schema for circular references
 ```
 
 ### Parsing

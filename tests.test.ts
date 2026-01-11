@@ -13,10 +13,11 @@ import {
   parse,
   parseWithDiagnostics,
   field,
+  unknown,
+  typed,
   type Infer,
   type Diagnostic,
   type UnionSelectionDetails,
-  type Schema,
 } from "./index";
 
 // Helper to get union selection details from diagnostics
@@ -656,7 +657,7 @@ describe("oneOf - real world scenarios", () => {
 });
 
 // ============================================================================
-// UNION (SIMPLE - same as oneOf with rest params)
+// UNION
 // ============================================================================
 
 describe("union", () => {
@@ -2173,6 +2174,234 @@ describe("readme examples", () => {
         lastFour: "4242",
       });
     });
+  });
+
+  describe("type inference", () => {
+    test("parses complex schema with optional settings omitted", () => {
+      const User = object({
+        id: number(),
+        name: string(),
+        tags: array(string()),
+        settings: optional(
+          object({
+            theme: literal("light"),
+            notifications: boolean(),
+          })
+        ),
+      });
+      const result = parse(User, { id: 1, name: "test", tags: ["a"] });
+      expect(result).toEqual({ id: 1, name: "test", tags: ["a"] });
+      expect("settings" in result).toBe(false);
+    });
+
+    test("parses complex schema with optional settings present", () => {
+      const User = object({
+        id: number(),
+        name: string(),
+        tags: array(string()),
+        settings: optional(
+          object({
+            theme: literal("light"),
+            notifications: boolean(),
+          })
+        ),
+      });
+      const result = parse(User, {
+        id: 1,
+        name: "test",
+        tags: [],
+        settings: { theme: "dark", notifications: false },
+      });
+      expect(result.settings).toEqual({ theme: "dark", notifications: false });
+    });
+  });
+
+  describe("cyclic / recursive types", () => {
+    test("parses recursive structure", () => {
+      const UserSchema = object({
+        id: string(),
+        name: string(),
+        get manager() {
+          return UserSchema;
+        },
+      });
+      const result = parse(UserSchema, {
+        id: "1",
+        name: "Alice",
+        manager: { id: "2", name: "Bob" },
+      });
+
+      expect(result).toMatchObject({
+        id: "1",
+        name: "Alice",
+        manager: { id: "2", name: "Bob" },
+      });
+    });
+
+    test("getter-defined fields are omitted when missing", () => {
+      const UserSchema = object({
+        id: string(),
+        name: string(),
+        get manager() {
+          return UserSchema;
+        },
+      });
+      const result = parse(UserSchema, { id: "1", name: "Alice" });
+      expect(result).toEqual({ id: "1", name: "Alice" });
+      expect("manager" in result).toBe(false);
+    });
+  });
+
+  describe("accepting any value", () => {
+    const Metadata = object({
+      id: string(),
+      data: unknown(),
+    });
+
+    test("accepts any value for unknown field", () => {
+      const result = parse(Metadata, {
+        id: "123",
+        data: { anything: "goes", nested: [1, 2, 3] },
+      });
+
+      expect(result).toEqual({
+        id: "123",
+        data: { anything: "goes", nested: [1, 2, 3] },
+      });
+    });
+
+    test("accepts primitive for unknown field", () => {
+      expect(parse(Metadata, { id: "1", data: "string" })).toEqual({
+        id: "1",
+        data: "string",
+      });
+      expect(parse(Metadata, { id: "2", data: 42 })).toEqual({
+        id: "2",
+        data: 42,
+      });
+      expect(parse(Metadata, { id: "3", data: true })).toEqual({
+        id: "3",
+        data: true,
+      });
+    });
+
+    test("accepts null for unknown field", () => {
+      expect(parse(Metadata, { id: "1", data: null })).toEqual({
+        id: "1",
+        data: null,
+      });
+    });
+
+    test("accepts undefined for unknown field", () => {
+      expect(parse(Metadata, { id: "1", data: undefined })).toEqual({
+        id: "1",
+        data: undefined,
+      });
+    });
+
+    test("accepts array for unknown field", () => {
+      expect(
+        parse(Metadata, { id: "1", data: [1, "two", { three: 3 }] })
+      ).toEqual({
+        id: "1",
+        data: [1, "two", { three: 3 }],
+      });
+    });
+
+    test("defaults to undefined when unknown field is missing", () => {
+      expect(parse(Metadata, { id: "1" })).toEqual({
+        id: "1",
+        data: undefined,
+      });
+    });
+  });
+});
+
+// ============================================================================
+// UNKNOWN SCHEMA
+// ============================================================================
+
+describe("unknown schema", () => {
+  test("passes through any value unchanged (same reference)", () => {
+    const schema = unknown();
+    const obj = { a: 1 };
+    const arr = [1, 2];
+    const fn = () => {};
+
+    expect(parse(schema, obj)).toBe(obj);
+    expect(parse(schema, arr)).toBe(arr);
+    expect(parse(schema, fn)).toBe(fn);
+    expect(parse(schema, null)).toBeNull();
+    expect(parse(schema, undefined)).toBeUndefined();
+  });
+
+  test("default value is undefined", () => {
+    const schema = unknown();
+    expect(schema._default).toBeUndefined();
+  });
+
+  test("missing field in object gets undefined", () => {
+    const schema = object({ id: string(), data: unknown() });
+    const result = parse(schema, { id: "123" });
+    expect(result).toEqual({ id: "123", data: undefined });
+    expect("data" in result).toBe(true);
+  });
+
+  test("does not coerce values like other schemas do", () => {
+    const schema = unknown();
+    expect(parse(schema, 123)).toBe(123); // not "123" like string() would
+    expect(parse(schema, true)).toBe(true); // not "true"
+  });
+
+  test("works with optional and nullable wrappers", () => {
+    const optSchema = object({ data: optional(unknown()) });
+    expect(parse(optSchema, {})).toEqual({});
+    expect("data" in parse(optSchema, {})).toBe(false);
+
+    const nullSchema = object({ data: nullable(unknown()) });
+    expect(parse(nullSchema, {})).toEqual({ data: null });
+  });
+
+  test("infers unknown type", () => {
+    const schema = unknown();
+    type T = Infer<typeof schema>;
+
+    // Compile-time assertion: T should be unknown
+    const _check: T = {} as unknown;
+    void _check;
+  });
+});
+
+// ============================================================================
+// TYPED HELPER
+// ============================================================================
+
+describe("typed helper", () => {
+  test("does not change runtime behavior", () => {
+    const original = object({ name: string(), age: number() });
+    const typedSchema = typed<{ name: string; age: number }>(original);
+
+    // Same parsing results
+    const input = { name: "Alice", age: "30" };
+    expect(parse(typedSchema, input)).toEqual(parse(original, input));
+  });
+
+  test("is same reference as input schema", () => {
+    const original = object({ name: string() });
+    const typedVersion = typed<{ name: string }>(original);
+
+    expect(Object.is(typedVersion, original)).toBe(true);
+  });
+
+  test("infers provided type", () => {
+    type User = { name: string; age: number };
+    const UserSchema = typed<User>(object({ name: string(), age: number() }));
+
+    type Inferred = Infer<typeof UserSchema>;
+
+    // Compile-time type assertion: Inferred should be User
+    const _check: Inferred = {} as User;
+    void _check;
   });
 });
 
