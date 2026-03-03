@@ -245,6 +245,66 @@ describe("literal schema", () => {
     expect(parse(schema, null)).toBe(42);
   });
 
+  test("emits literal_default diagnostic for nullish input", () => {
+    const schema = literal("hello");
+    const out = parseWithDiagnostics(schema, undefined);
+    expect(out.value).toBe("hello");
+    expect(out.diagnostics).toHaveLength(1);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "literal_default",
+      path: [],
+      details: { expected: "hello", received: undefined },
+    });
+  });
+
+  test("emits literal_mismatch diagnostic for same-type non-literal values", () => {
+    const schema = literal("hello");
+    const out = parseWithDiagnostics(schema, "world");
+    expect(out.value).toBe("world");
+    expect(out.diagnostics).toHaveLength(1);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "literal_mismatch",
+      path: [],
+      details: { expected: "hello", received: "world" },
+    });
+  });
+
+  test("emits literal_coercion diagnostic when coercing other types", () => {
+    const schema = literal(42);
+    const out = parseWithDiagnostics(schema, "100");
+    expect(out.value).toBe(100);
+    expect(out.diagnostics).toHaveLength(1);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "literal_coercion",
+      path: [],
+      details: { expected: 42, received: "100" },
+    });
+  });
+
+  test("literal diagnostics preserve nested object path", () => {
+    const schema = object({ status: literal("active") });
+    const out = parseWithDiagnostics(schema, {});
+    expect(out.value).toEqual({ status: "active" });
+    expect(out.diagnostics).toHaveLength(1);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "literal_default",
+      path: ["status"],
+      details: { expected: "active", received: undefined },
+    });
+  });
+
+  test("literal diagnostics preserve nested array path", () => {
+    const schema = array(object({ status: literal("active") }));
+    const out = parseWithDiagnostics(schema, [{ status: "inactive" }]);
+    expect(out.value).toEqual([{ status: "inactive" }]);
+    expect(out.diagnostics).toHaveLength(1);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "literal_mismatch",
+      path: [0, "status"],
+      details: { expected: "active", received: "inactive" },
+    });
+  });
+
   test("type is literal | base type", () => {
     const strLit = literal("hello");
     type StrType = Infer<typeof strLit>;
@@ -670,6 +730,26 @@ describe("union", () => {
   test("coerces when needed", () => {
     const schema = union(string(), number());
     expect(parse(schema, true)).toBe("true");
+  });
+
+  test("reports best score reason for object branch selection", () => {
+    const A = object({ a: string() }, "A");
+    const B = object({ a: string(), b: string() }, "B");
+    const out = parseWithDiagnostics(union(A, B), { a: "x", b: "y" });
+    expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("B");
+    expect(getUnionSelection(out.diagnostics)?.reason).toBe("best score");
+  });
+
+  test("reports type match reason for primitive branch selection", () => {
+    const out = parseWithDiagnostics(union(string(), number()), "42");
+    expect(getUnionSelection(out.diagnostics)?.chosenIndex).toBe(0);
+    expect(getUnionSelection(out.diagnostics)?.reason).toBe("type match");
+  });
+
+  test("reports exact match reason when literal branch matches exactly", () => {
+    const out = parseWithDiagnostics(union(literal("a"), literal("b")), "b");
+    expect(getUnionSelection(out.diagnostics)?.chosenIndex).toBe(1);
+    expect(getUnionSelection(out.diagnostics)?.reason).toBe("exact match");
   });
 });
 
@@ -1820,9 +1900,13 @@ describe("readme examples", () => {
 
       // Diagnostics indicate missing fields
       const defaultDiags = diagnostics.filter((d) => d.kind === "default");
-      expect(defaultDiags).toHaveLength(2);
+      const literalDefaultDiags = diagnostics.filter(
+        (d) => d.kind === "literal_default"
+      );
+      expect(defaultDiags).toHaveLength(1);
+      expect(literalDefaultDiags).toHaveLength(1);
       expect(defaultDiags[0]!.path).toEqual(["email"]);
-      expect(defaultDiags[1]!.path).toEqual(["role"]);
+      expect(literalDefaultDiags[0]!.path).toEqual(["role"]);
     });
 
     test("detects type coercion with coercion diagnostic", () => {
@@ -1853,6 +1937,9 @@ describe("readme examples", () => {
 
       const coercions = diagnostics.filter((d) => d.kind === "coercion");
       const defaults = diagnostics.filter((d) => d.kind === "default");
+      const literalDefaults = diagnostics.filter(
+        (d) => d.kind === "literal_default"
+      );
 
       expect(coercions).toHaveLength(2);
       expect(coercions[0]).toMatchObject({
@@ -1866,9 +1953,13 @@ describe("readme examples", () => {
         details: { from: "number", to: "string" },
       });
 
-      expect(defaults).toHaveLength(2);
+      expect(defaults).toHaveLength(1);
+      expect(literalDefaults).toHaveLength(1);
       expect(defaults[0]).toMatchObject({ kind: "default", path: ["email"] });
-      expect(defaults[1]).toMatchObject({ kind: "default", path: ["role"] });
+      expect(literalDefaults[0]).toMatchObject({
+        kind: "literal_default",
+        path: ["role"],
+      });
 
       // Value is still usable
       expect(value.id).toBe(789);
@@ -2808,6 +2899,40 @@ describe("field schema - edge cases", () => {
     const result = parse(Config, {});
     expect(result).toEqual({ status: "active" });
   });
+
+  test("field wrapper does not mutate shared schema instances", () => {
+    const shared = string();
+    const A = object({ firstName: field(shared, { from: "first_name" }) });
+    const B = object({ nickname: field(shared, { from: "nick_name" }) });
+
+    expect(parse(A, { first_name: "Alice" })).toEqual({ firstName: "Alice" });
+    expect(parse(A, { nick_name: "Nick" })).toEqual({
+      firstName: "",
+      nick_name: "Nick",
+    });
+    expect(parse(B, { nick_name: "Nick" })).toEqual({ nickname: "Nick" });
+  });
+
+  test("field wrapper preserves optional semantics with shared schemas", () => {
+    const shared = optional(string());
+    const A = object({ firstName: field(shared, { from: "first_name" }) });
+    const B = object({ nickname: field(shared, { from: "nick_name" }) });
+
+    expect(parse(A, {})).toEqual({});
+    expect(parse(A, { nick_name: "Nick" })).toEqual({ nick_name: "Nick" });
+    expect(parse(B, { nick_name: "Nick" })).toEqual({ nickname: "Nick" });
+  });
+
+  test("alias value takes precedence when alias and schema key are both present", () => {
+    const User = object({
+      firstName: field(string(), { from: "first_name" }),
+    });
+    const result = parse(User, {
+      first_name: "AliasValue",
+      firstName: "SchemaKeyValue",
+    });
+    expect(result).toEqual({ firstName: "AliasValue" });
+  });
 });
 
 describe("field schema - type inference", () => {
@@ -3130,5 +3255,265 @@ describe("type resolution", () => {
     // the output type should be writable
     out.b = { name: "test" };
     expect(out.b).toEqual({ name: "test" });
+  });
+});
+
+// ============================================================================
+// BEHAVIORAL INVARIANTS
+// ============================================================================
+
+describe("behavioral invariants", () => {
+  test("parse does not mutate input objects", () => {
+    const Schema = object({
+      firstName: field(string(), { from: "first_name" }),
+      profile: object({ age: number() }),
+      tags: array(string()),
+    });
+
+    const input = {
+      first_name: "Alice",
+      profile: { age: "30" },
+      tags: [1, "two"],
+      extra: { nested: true },
+    };
+    const before = JSON.parse(JSON.stringify(input));
+
+    const out = parse(Schema, input);
+    expect(out).toEqual({
+      firstName: "Alice",
+      profile: { age: 30 },
+      tags: ["1", "two"],
+      extra: { nested: true },
+    });
+    expect(input).toEqual(before);
+  });
+
+  test("parse is value-idempotent for complex nested schema (without alias remapping)", () => {
+    const Event = union(
+      object(
+        {
+          type: literal("a"),
+          id: number(),
+          count: optional(number()),
+          attrs: object({
+            active: boolean(),
+            notes: optional(string()),
+          }),
+        },
+        "A"
+      ),
+      object(
+        {
+          type: literal("b"),
+          names: array(string()),
+          meta: optional(unknown()),
+        },
+        "B"
+      ),
+      string()
+    );
+
+    const raw = {
+      type: "a",
+      id: "42",
+      count: "7",
+      attrs: { active: "true" },
+      unmodeled: { keep: 1 },
+    };
+    const once = parse(Event, raw);
+    const twice = parse(Event, once);
+    expect(twice).toEqual(once);
+  });
+
+  test("alias-only mapped fields are not value-idempotent", () => {
+    const Schema = object({
+      count: field(optional(number()), { from: "count_v1" }),
+    });
+
+    const once = parse(Schema, { count_v1: "7" });
+    const twice = parse(Schema, once);
+
+    expect(once).toEqual({ count: 7 });
+    expect(twice).toEqual({});
+  });
+
+  test("union selection diagnostic is always first", () => {
+    const U = union(
+      object({ id: number() }, "Obj"),
+      object({ name: string() }, "Named")
+    );
+    const out = parseWithDiagnostics(U, { id: "1" });
+    expect(out.diagnostics[0]!.kind).toBe("union_selection");
+  });
+
+  test("union selection is deterministic across input key order", () => {
+    const A = object({ kind: literal("a"), left: string() }, "A");
+    const B = object({ kind: literal("b"), right: string() }, "B");
+    const U = union(A, B);
+
+    const input1 = { kind: "z", right: "yes", extra: 1 };
+    const input2 = { extra: 1, right: "yes", kind: "z" };
+
+    const out1 = parseWithDiagnostics(U, input1);
+    const out2 = parseWithDiagnostics(U, input2);
+
+    expect(getUnionSelection(out1.diagnostics)?.chosenIndex).toBe(1);
+    expect(getUnionSelection(out2.diagnostics)?.chosenIndex).toBe(1);
+    expect(getUnionSelection(out1.diagnostics)?.reason).toBe(
+      getUnionSelection(out2.diagnostics)?.reason
+    );
+    expect(out1.value).toEqual(out2.value);
+  });
+
+  test("repeated parseWithDiagnostics calls are deterministic", () => {
+    const A = object({ kind: literal("a"), a: string() }, "A");
+    const B = object({ kind: literal("b"), b: number() }, "B");
+    const U = union(A, B);
+    const input = { kind: "z", b: "7", extra: true };
+
+    const first = parseWithDiagnostics(U, input);
+    const firstSel = getUnionSelection(first.diagnostics);
+    expect(firstSel).toBeDefined();
+
+    for (let i = 0; i < 20; i++) {
+      const next = parseWithDiagnostics(U, input);
+      const nextSel = getUnionSelection(next.diagnostics);
+      expect(next.value).toEqual(first.value);
+      expect(nextSel?.chosenIndex).toBe(firstSel?.chosenIndex);
+      expect(nextSel?.reason).toBe(firstSel?.reason);
+      expect(nextSel?.chosenName).toBe(firstSel?.chosenName);
+    }
+  });
+
+  test("two fields sharing one alias key: first consumes, second defaults", () => {
+    const Schema = object({
+      a: field(string(), { from: "x" }),
+      b: field(string(), { from: "x" }),
+    });
+    expect(parse(Schema, { x: "value" })).toEqual({ a: "value", b: "" });
+  });
+
+  test("alias collision with schema key: aliased field consumes source key first", () => {
+    const Schema = object({
+      fromAlias: field(string(), { from: "x" }),
+      x: number(),
+    });
+    expect(parse(Schema, { x: "7" })).toEqual({ fromAlias: "7", x: 0 });
+  });
+
+  test("field_alias diagnostic appears only when alias key is used", () => {
+    const Schema = object({
+      value: field(number(), { from: "value_old" }),
+    });
+
+    const canonical = parseWithDiagnostics(Schema, { value: "1" });
+    expect(canonical.diagnostics.some((d) => d.kind === "field_alias")).toBe(
+      false
+    );
+
+    const aliased = parseWithDiagnostics(Schema, { value_old: "1" });
+    expect(aliased.diagnostics.some((d) => d.kind === "field_alias")).toBe(
+      true
+    );
+  });
+
+  test("optional+nullable composition semantics are stable", () => {
+    const Schema = object({
+      a: optional(nullable(number())),
+      b: nullable(optional(number())),
+    });
+
+    expect(parse(Schema, {})).toEqual({ b: null });
+    expect(parse(Schema, { a: null, b: undefined })).toEqual({ a: null, b: null });
+    expect(parse(Schema, { a: "2", b: "3" })).toEqual({ a: 2, b: 3 });
+  });
+
+  test("array_wrap diagnostic precedes nested element diagnostics with correct paths", () => {
+    const Schema = array(object({ kind: literal("x") }));
+    const out = parseWithDiagnostics(Schema, { kind: "y" });
+
+    expect(out.value).toEqual([{ kind: "y" }]);
+    expect(out.diagnostics[0]).toMatchObject({
+      kind: "array_wrap",
+      path: [],
+    });
+    expect(out.diagnostics[1]).toMatchObject({
+      kind: "literal_mismatch",
+      path: [0, "kind"],
+      details: { expected: "x", received: "y" },
+    });
+  });
+
+  test("symbol-keyed unknown properties are preserved", () => {
+    const sym = Symbol("meta");
+    const input: Record<string | symbol, unknown> = { name: "a" };
+    input[sym] = "secret";
+
+    const out = parse(object({ name: string() }), input);
+    expect(out[sym]).toBe("secret");
+  });
+
+  test("fuzzed values: parse never throws and output is idempotent", () => {
+    const Schema = union(
+      object(
+        {
+          type: literal("a"),
+          id: number(),
+          active: boolean(),
+          meta: optional(unknown()),
+        },
+        "A"
+      ),
+      object(
+        {
+          type: literal("b"),
+          names: array(string()),
+          flag: optional(boolean()),
+        },
+        "B"
+      ),
+      string(),
+      number(),
+      boolean()
+    );
+
+    let seed = 123456789;
+    const rnd = () => {
+      seed = (1664525 * seed + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const gen = (depth = 0): unknown => {
+      const r = rnd();
+      if (depth > 2) {
+        if (r < 0.2) return null;
+        if (r < 0.4) return undefined;
+        if (r < 0.6) return Math.floor(rnd() * 10);
+        if (r < 0.8) return rnd() < 0.5;
+        return String(Math.floor(rnd() * 10));
+      }
+      if (r < 0.2) return Math.floor(rnd() * 100);
+      if (r < 0.35) return rnd() < 0.5;
+      if (r < 0.5) return rnd() < 0.3 ? null : undefined;
+      if (r < 0.7) {
+        const len = Math.floor(rnd() * 4);
+        const arr: unknown[] = [];
+        for (let i = 0; i < len; i++) arr.push(gen(depth + 1));
+        return arr;
+      }
+      const obj: Record<string, unknown> = {};
+      const len = Math.floor(rnd() * 4);
+      for (let i = 0; i < len; i++) {
+        obj[`k${Math.floor(rnd() * 6)}`] = gen(depth + 1);
+      }
+      return obj;
+    };
+
+    for (let i = 0; i < 250; i++) {
+      const raw = gen();
+      expect(() => parse(Schema, raw)).not.toThrow();
+      const once = parse(Schema, raw);
+      const twice = parse(Schema, once);
+      expect(twice).toEqual(once);
+    }
   });
 });
