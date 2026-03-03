@@ -421,7 +421,7 @@ export function literal<T extends Primitive>(
     (value): InternalResult<LiteralOutput<T>> => {
       if (value === undefined || value === null)
         return result(expected as LiteralOutput<T>, 0, false, false, [
-          makeDiag("default", { schema: "literal", value: expected }),
+          makeDiag("literal_default", { expected, received: value }),
         ]);
       if (value === expected)
         return result(
@@ -437,14 +437,16 @@ export function literal<T extends Primitive>(
           S_LITERAL_TYPE,
           false,
           true,
-          NO_DIAGNOSTICS
+          [makeDiag("literal_mismatch", { expected, received: value })]
         );
       const b = base(value);
       if (b.diagnostics.some((d) => d.kind === "default"))
         return result(expected as LiteralOutput<T>, 0, false, false, [
-          makeDiag("default", { schema: "literal", value: expected }),
+          makeDiag("literal_default", { expected, received: value }),
         ]);
-      return b;
+      return result(b.value, b.score, b.exactMatch, b.typeMatch, [
+        makeDiag("literal_coercion", { expected, received: value }),
+      ]);
     }
   ) as Schema<LiteralOutput<T>> & { _literal: T };
   schema._literal = expected;
@@ -877,8 +879,11 @@ export function field<T extends Schema>(
   inner: T,
   options?: { from?: string }
 ): FieldReturn<T> {
-  if (options?.from) (inner as FieldSchema<T>)._from = options.from;
-  return inner as unknown as FieldReturn<T>;
+  // Create an independent wrapper to avoid mutating/re-aliasing shared schema instances.
+  const wrapped = ((value: unknown) => inner(value)) as FieldSchema<T>;
+  Object.assign(wrapped, inner);
+  if (options?.from) wrapped._from = options.from;
+  return wrapped as unknown as FieldReturn<T>;
 }
 
 // Compute unique field counts for union discrimination
@@ -990,7 +995,12 @@ export function union<T extends NonEmptyArray<Schema>>(
     if (!best) best = schemas[0]!(value) as InternalResult<Infer<T[number]>>;
     let reason: "exact match" | "type match" | "best score";
     if (best.exactMatch) reason = "exact match";
-    else if (best.typeMatch) reason = "type match";
+    else if (
+      best.typeMatch &&
+      schemas[idx]!._kind !== "object" &&
+      schemas[idx]!._kind !== "array"
+    )
+      reason = "type match";
     else reason = "best score";
     const d: Diagnostic[] = [
       makeDiag("union_selection", {
