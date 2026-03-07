@@ -99,7 +99,7 @@ jobs:
           npm publish ./packages/tonic
 
           # Commit and tag
-          git add Cargo.toml packages/tonic/package.json
+          git add Cargo.toml Cargo.lock packages/tonic/package.json
           git commit -m "chore: release v${VERSION} [skip ci]"
           git tag "v${VERSION}"
 

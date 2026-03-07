@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -52,4 +53,34 @@ if (!updatedWorkspaceVersion || !updatedDeriveDependencyVersion) {
   throw new Error("failed to update Cargo.toml version fields");
 }
 
-writeFileSync(cargoTomlPath, `${lines.join("\n")}\n`);
+const updatedCargoToml = lines.join("\n");
+
+writeFileSync(
+  cargoTomlPath,
+  updatedCargoToml.endsWith("\n") ? updatedCargoToml : `${updatedCargoToml}\n`,
+);
+
+function runCargo(args) {
+  const result = spawnSync("cargo", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+
+  return {
+    status: result.status ?? 1,
+    error: result.stderr || result.stdout || `cargo ${args.join(" ")} failed`,
+  };
+}
+
+const offlineRefresh = runCargo(["update", "--workspace", "--offline"]);
+
+if (offlineRefresh.status !== 0) {
+  const onlineRefresh = runCargo(["update", "--workspace"]);
+
+  if (onlineRefresh.status !== 0) {
+    throw new Error(
+      `failed to refresh Cargo.lock\n\n${onlineRefresh.error.trim()}`,
+    );
+  }
+}
