@@ -23,11 +23,15 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: bun install
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Test
-        run: bun test
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check
+        run: bun run check
 
       - name: Build
         run: bun run build
@@ -81,19 +85,26 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Bump version
-          bun pm version ${{ steps.release.outputs.bump }} --no-git-tag-version
+          npm version ${{ steps.release.outputs.bump }} --no-git-tag-version --prefix packages/tonic
+          bun run version:sync:rust
 
           # Get new version
-          VERSION=$(bun -p "require('./package.json').version")
+          VERSION=$(node -p "require('./packages/tonic/package.json').version")
+
+          # Verify publish payloads before pushing tags
+          bun run release:all:dry-run
 
           # TODO: Replace with `bun publish` when OIDC is supported
-          npm publish
+          bun run release:rust
+          npm publish ./packages/tonic
 
           # Commit and tag
-          git add package.json
+          git add Cargo.toml packages/tonic/package.json
           git commit -m "chore: release v${VERSION} [skip ci]"
           git tag "v${VERSION}"
 
           # Push changes
           git push
           git push --tags
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
