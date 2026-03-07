@@ -73,8 +73,33 @@ jobs:
           if [ -z "$BUMP" ]; then
             echo "should_release=false" >> $GITHUB_OUTPUT
           else
+            if [ -n "$LAST_TAG" ]; then
+              BASE_VERSION=${LAST_TAG#v}
+            else
+              BASE_VERSION=$(node -p "require('./packages/tonic/package.json').version")
+            fi
+
+            IFS=. read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+            case "$BUMP" in
+              major)
+                VERSION="$((MAJOR + 1)).0.0"
+                ;;
+              minor)
+                VERSION="${MAJOR}.$((MINOR + 1)).0"
+                ;;
+              patch)
+                VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+                ;;
+              *)
+                echo "unsupported bump: $BUMP" >&2
+                exit 1
+                ;;
+            esac
+
             echo "should_release=true" >> $GITHUB_OUTPUT
             echo "bump=$BUMP" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
           fi
 
       - name: Bump version and publish
@@ -85,11 +110,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Bump version
-          npm version ${{ steps.release.outputs.bump }} --no-git-tag-version --prefix packages/tonic
-          bun run version:sync:rust
-
-          # Get new version
-          VERSION=$(node -p "require('./packages/tonic/package.json').version")
+          VERSION=${{ steps.release.outputs.version }}
+          npm version "$VERSION" --no-git-tag-version --prefix packages/tonic
+          cargo set-version --workspace "$VERSION"
 
           # Verify publish payloads before pushing tags
           bun run release:all:dry-run
