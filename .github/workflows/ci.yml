@@ -109,6 +109,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Install cargo release tooling
+          if ! cargo --list | grep -q '^[[:space:]]*set-version$'; then
+            cargo install cargo-set-version --version 0.0.3 --locked
+          fi
+
           # Bump version
           VERSION=${{ steps.release.outputs.version }}
           npm version "$VERSION" --no-git-tag-version --prefix packages/tonic
