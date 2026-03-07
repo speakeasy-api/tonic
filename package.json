@@ -1,52 +1,35 @@
 {
-  "name": "@speakeasy-api/tonic",
-  "version": "0.1.1",
+  "name": "tonic-workspace",
+  "private": true,
   "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./dist/index.d.cts",
-        "default": "./dist/index.cjs"
-      }
-    }
-  },
-  "sideEffects": false,
-  "files": [
-    "dist",
-    "logo.svg"
+  "workspaces": [
+    "packages/*"
   ],
   "scripts": {
-    "build": "tsup",
-    "test": "bun test",
-    "size": "size-limit"
+    "build": "bun run build:ts",
+    "build:ts": "cd packages/tonic && bun run build",
+    "check": "bun run check:ts && bun run check:rust",
+    "check:ts": "bun run fmt:ts:check && bun run test:ts && bun run build:ts",
+    "check:rust": "bun run fmt:rust:check && bun run lint:rust && bun run test:rust",
+    "fmt:ts": "prettier --write . --ignore-path .prettierignore --ignore-unknown",
+    "fmt:ts:check": "prettier --check . --ignore-path .prettierignore --ignore-unknown",
+    "fmt:rust": "cargo fmt --all",
+    "fmt:rust:check": "cargo fmt --all --check",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "bun run test:ts && bun run test:rust",
+    "test:ts": "cd packages/tonic && bun run test",
+    "test:rust": "cargo test --workspace",
+    "size": "cd packages/tonic && bun run size",
+    "parity:diff": "bun tooling/parity/compare.ts",
+    "release:ts": "npm publish ./packages/tonic",
+    "release:ts:dry-run": "npm publish --dry-run ./packages/tonic",
+    "release:rust": "bun tooling/release/publish-rust.mjs",
+    "release:rust:dry-run": "bun tooling/release/publish-rust.mjs --dry-run",
+    "release:all": "bun run release:rust && bun run release:ts",
+    "release:all:dry-run": "bun run release:rust:dry-run && bun run release:ts:dry-run",
+    "version:sync:rust": "bun tooling/release/sync-rust-version.mjs"
   },
-  "size-limit": [
-    {
-      "path": "dist/index.js",
-      "limit": "2.5 kB"
-    },
-    {
-      "path": "dist/index.cjs",
-      "limit": "2.5 kB"
-    }
-  ],
   "devDependencies": {
-    "@size-limit/file": "^12.0.0",
-    "@types/bun": "latest",
-    "size-limit": "^12.0.0",
-    "tsup": "^8.0.0"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "publishConfig": {
-    "access": "public"
+    "prettier": "^3"
   }
 }

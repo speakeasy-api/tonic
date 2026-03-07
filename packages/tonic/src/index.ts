@@ -3,8 +3,8 @@ type Prettify<T> = T extends infer U ? { [K in keyof U]: U[K] } & {} : never;
 type DeepPrettify<T> = T extends (infer U)[]
   ? DeepPrettify<U>[]
   : T extends object
-  ? Prettify<{ [K in keyof T]: DeepPrettify<T[K]> }>
-  : T;
+    ? Prettify<{ [K in keyof T]: DeepPrettify<T[K]> }>
+    : T;
 
 export type DiagnosticKind =
   | "coercion"
@@ -110,7 +110,7 @@ function result<T>(
   s: number,
   e: boolean,
   t: boolean,
-  d: Diagnostic[]
+  d: Diagnostic[],
 ): InternalResult<T> {
   return { value: v, score: s, exactMatch: e, typeMatch: t, diagnostics: d };
 }
@@ -140,7 +140,7 @@ function prependPath(diagnostics: Diagnostic[], segment: string | number) {
 function makeDiag<K extends DiagnosticKind>(
   kind: K,
   details: DiagnosticDetailsByKind[K],
-  path?: string | number
+  path?: string | number,
 ): Diagnostic {
   return { kind, path: path ? [path] : [], details } as Diagnostic;
 }
@@ -158,13 +158,14 @@ export interface $TonicType<Internals extends $Tonic = $Tonic> {
   _default: any;
 }
 
-type $Output<T> = T extends $TonicObject<infer S>
-  ? InferObjectOutput<S>
-  : T extends $TonicArray<infer E>
-  ? $Output<E>[]
-  : T extends $TonicType<infer I>
-  ? I["output"]
-  : unknown;
+type $Output<T> =
+  T extends $TonicObject<infer S>
+    ? InferObjectOutput<S>
+    : T extends $TonicArray<infer E>
+      ? $Output<E>[]
+      : T extends $TonicType<infer I>
+        ? I["output"]
+        : unknown;
 
 /**
  * A schema definition that parses and coerces values to type `T`.
@@ -209,7 +210,7 @@ type NonEmptyArray<T> = [T, ...T[]];
 function createSchema<T>(
   kind: string,
   defaultValue: T,
-  parse: (value: unknown) => InternalResult<T>
+  parse: (value: unknown) => InternalResult<T>,
 ): Schema<T> {
   const schema = parse as Schema<T>;
   schema._output = null as unknown as T;
@@ -350,7 +351,7 @@ export function boolean(): Schema<boolean> {
         S_EXACT_TYPE,
         false,
         true,
-        NO_DIAGNOSTICS
+        NO_DIAGNOSTICS,
       );
     let r: boolean;
     if (value === "false" || value === 0) r = false;
@@ -367,10 +368,10 @@ type Primitive = string | number | boolean | null;
 type LiteralOutput<T extends Primitive> = T extends string
   ? T | (string & {})
   : T extends number
-  ? T | (number & {})
-  : T extends null
-  ? T | (null & {})
-  : T | (boolean & {});
+    ? T | (number & {})
+    : T extends null
+      ? T | (null & {})
+      : T | (boolean & {});
 
 /**
  * Creates a schema for a specific literal value.
@@ -406,7 +407,7 @@ type LiteralOutput<T extends Primitive> = T extends string
  * ```
  */
 export function literal<T extends Primitive>(
-  expected: T
+  expected: T,
 ): Schema<LiteralOutput<T>> & { _literal: T } {
   const t = typeof expected;
   let base: Schema<LiteralOutput<T>>;
@@ -429,16 +430,12 @@ export function literal<T extends Primitive>(
           S_LITERAL_EXACT,
           true,
           true,
-          NO_DIAGNOSTICS
+          NO_DIAGNOSTICS,
         );
       if (typeof value === typeof expected)
-        return result(
-          value as LiteralOutput<T>,
-          S_LITERAL_TYPE,
-          false,
-          true,
-          [makeDiag("literal_mismatch", { expected, received: value })]
-        );
+        return result(value as LiteralOutput<T>, S_LITERAL_TYPE, false, true, [
+          makeDiag("literal_mismatch", { expected, received: value }),
+        ]);
       const b = base(value);
       if (b.diagnostics.some((d) => d.kind === "default"))
         return result(expected as LiteralOutput<T>, 0, false, false, [
@@ -447,7 +444,7 @@ export function literal<T extends Primitive>(
       return result(b.value, b.score, b.exactMatch, b.typeMatch, [
         makeDiag("literal_coercion", { expected, received: value }),
       ]);
-    }
+    },
   ) as Schema<LiteralOutput<T>> & { _literal: T };
   schema._literal = expected;
   return schema;
@@ -465,11 +462,8 @@ export interface $TonicArray<Element extends $TonicType = $TonicType> {
 type ObjectShape = Record<string, any>;
 
 // Detect readonly keys (getter-only properties) using type equality check
-type IfEquals<X, Y, A, B> = (<T>() => T extends X ? 1 : 2) extends <
-  T
->() => T extends Y ? 1 : 2
-  ? A
-  : B;
+type IfEquals<X, Y, A, B> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? A : B;
 
 type ReadonlyKeys<T> = {
   [K in keyof T]-?: IfEquals<
@@ -566,7 +560,7 @@ function isGetter<T>(obj: T, key: keyof T) {
  */
 export function object<T extends ObjectShape>(
   shape: T,
-  name?: string
+  name?: string,
 ): $TonicObject<T> {
   const getDefaultVal = (): InferObject<T> => {
     const defaultVal = {} as InferObject<T>;
@@ -664,7 +658,7 @@ export function object<T extends ObjectShape>(
       totalScore,
       hasExactDiscriminator && isObj,
       isObj,
-      diagnostics
+      diagnostics,
     );
   }
 
@@ -782,7 +776,7 @@ export function optional<T extends Schema>(inner: T): OptionalSchema<Infer<T>> {
   const schema = createSchema(
     "optional",
     undefined,
-    parseOptional
+    parseOptional,
   ) as OptionalSchema<Infer<T>>;
   schema._optional = true;
   return schema;
@@ -825,7 +819,7 @@ export function nullable<T extends Schema>(inner: T): NullableSchema<Infer<T>> {
   const schema = createSchema(
     "nullable",
     null,
-    parseNullable
+    parseNullable,
   ) as NullableSchema<Infer<T>>;
   schema._nullable = true;
   return schema;
@@ -877,7 +871,7 @@ type FieldReturn<T extends Schema> = FieldSchema<Infer<T>> &
  */
 export function field<T extends Schema>(
   inner: T,
-  options?: { from?: string }
+  options?: { from?: string },
 ): FieldReturn<T> {
   // Create an independent wrapper to avoid mutating/re-aliasing shared schema instances.
   const wrapped = ((value: unknown) => inner(value)) as FieldSchema<T>;
@@ -963,7 +957,7 @@ export function union<T extends NonEmptyArray<Schema>>(
 ): Schema<Infer<T[number]>> & { _schemas: T } {
   if (!schemas.length)
     return createSchema("union", undefined, () =>
-      result(undefined, 0, false, false, NO_DIAGNOSTICS)
+      result(undefined, 0, false, false, NO_DIAGNOSTICS),
     ) as Schema<Infer<T[number]>> & { _schemas: T };
   const keyCounts = computeKeyCounts(schemas);
   const defaultVal = schemas[0]!._default as Infer<T[number]>;
@@ -1184,7 +1178,7 @@ export function parse<T extends Schema>(schema: T, value: unknown): Infer<T> {
  */
 export function parseWithDiagnostics<T extends Schema>(
   schema: T,
-  value: unknown
+  value: unknown,
 ): ParseResult<Infer<T>> {
   return schema(value);
 }

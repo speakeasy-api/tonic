@@ -18,11 +18,11 @@ import {
   type Infer,
   type Diagnostic,
   type UnionSelectionDetails,
-} from "./index";
+} from "../src/index.ts";
 
 // Helper to get union selection details from diagnostics
 function getUnionSelection(
-  diagnostics: Diagnostic[]
+  diagnostics: Diagnostic[],
 ): UnionSelectionDetails | undefined {
   const d = diagnostics.find((d) => d.kind === "union_selection");
   return d?.details as UnionSelectionDetails | undefined;
@@ -625,13 +625,13 @@ describe("oneOf - object scoring", () => {
     // String value should prefer StringObj
     const result1 = parseWithDiagnostics(schema, { value: "hello" });
     expect(getUnionSelection(result1.diagnostics)?.chosenName).toBe(
-      "StringObj"
+      "StringObj",
     );
 
     // Number value should prefer NumberObj
     const result2 = parseWithDiagnostics(schema, { value: 42 });
     expect(getUnionSelection(result2.diagnostics)?.chosenName).toBe(
-      "NumberObj"
+      "NumberObj",
     );
   });
 });
@@ -644,7 +644,7 @@ describe("oneOf - real world scenarios", () => {
   test("primitives + object in oneOf", () => {
     const SomeObject = object(
       { kind: literal("someObject"), id: string() },
-      "SomeObject"
+      "SomeObject",
     );
 
     const Value = union(string(), number(), SomeObject);
@@ -711,7 +711,7 @@ describe("oneOf - real world scenarios", () => {
     expect(getUnionSelection(out.diagnostics)?.chosenIndex).toBe(0);
     expect(getUnionSelection(out.diagnostics)?.chosenName).toBe("A");
     expect(out.diagnostics.some((d) => d.kind === "union_selection")).toBe(
-      true
+      true,
     );
   });
 });
@@ -971,11 +971,11 @@ describe("open enum behavior", () => {
     // Cat { kind: OpenEnum["cat"] } | Dog { kind: OpenEnum["dog"] }
     const Cat = object(
       { kind: literal("cat"), meow: optional(string()) },
-      "Cat"
+      "Cat",
     );
     const Dog = object(
       { kind: literal("dog"), bark: optional(string()) },
-      "Dog"
+      "Dog",
     );
 
     const schema = union(Cat, Dog);
@@ -1091,7 +1091,7 @@ describe("open enum behavior", () => {
         bar: literal("b"),
         baz: literal("c"),
       },
-      "Extended"
+      "Extended",
     );
 
     const schema = union(Minimal, Extended);
@@ -1114,11 +1114,11 @@ describe("stress scenarios", () => {
   test("oneOf: prefers exact literal discriminator match over unique-property match", () => {
     const A = object(
       { kind: literal("a"), common: string(), aOnly: string() },
-      "A"
+      "A",
     );
     const B = object(
       { kind: literal("b"), common: string(), bOnly: string() },
-      "B"
+      "B",
     );
 
     const schema = union(A, B);
@@ -1176,7 +1176,7 @@ describe("stress scenarios", () => {
           }),
         }),
       },
-      "DeepA"
+      "DeepA",
     );
 
     const DeepB = object({ x: string() }, "DeepB");
@@ -1195,12 +1195,12 @@ describe("stress scenarios", () => {
     const Item = union(
       object(
         { kind: literal("obj"), id: number(), tag: optional(string()) },
-        "Obj"
+        "Obj",
       ),
       string(),
       number(),
       boolean(),
-      array(number())
+      array(number()),
     );
 
     const schema = array(Item);
@@ -1244,7 +1244,7 @@ describe("stress scenarios", () => {
     const AsArray = array(number());
     const AsObject = object(
       { items: array(number()), note: optional(string()) },
-      "AsObject"
+      "AsObject",
     );
 
     const schema = union(AsArray, AsObject);
@@ -1268,7 +1268,7 @@ describe("stress scenarios", () => {
         line1: string(),
         postcode: string(),
       },
-      "Address"
+      "Address",
     );
 
     const Coordinates = object(
@@ -1276,7 +1276,7 @@ describe("stress scenarios", () => {
         lat: number(),
         lng: number(),
       },
-      "Coordinates"
+      "Coordinates",
     );
 
     const Location = union(Address, Coordinates);
@@ -1358,7 +1358,7 @@ describe("stress scenarios", () => {
         qty: number(),
         price: object({ currency: string(), amount: number() }),
       },
-      "LineItem"
+      "LineItem",
     );
 
     const Order = object(
@@ -1370,7 +1370,7 @@ describe("stress scenarios", () => {
           email: optional(string()),
         }),
       },
-      "Order"
+      "Order",
     );
 
     const input = {
@@ -1422,23 +1422,23 @@ describe("stress scenarios", () => {
   test("large oneOf fanout: many candidates, nested, and ambiguous inputs remain deterministic", () => {
     const A = object(
       { kind: literal("a"), a: string(), common: string() },
-      "A"
+      "A",
     );
     const B = object(
       { kind: literal("b"), b: number(), common: string() },
-      "B"
+      "B",
     );
     const C = object(
       { kind: literal("c"), c: boolean(), common: string() },
-      "C"
+      "C",
     );
     const D = object(
       { kind: literal("d"), d: array(number()), common: string() },
-      "D"
+      "D",
     );
     const E = object(
       { kind: literal("e"), e: object({ nested: string() }), common: string() },
-      "E"
+      "E",
     );
 
     const schema = union(A, B, C, D, E, string(), number(), boolean());
@@ -1505,7 +1505,7 @@ describe("security issues", () => {
 
     // Malicious input with __proto__ key
     const maliciousInput = JSON.parse(
-      '{"name": "test", "__proto__": {"polluted": true}}'
+      '{"name": "test", "__proto__": {"polluted": true}}',
     );
 
     const result = parse(schema, maliciousInput);
@@ -1513,7 +1513,7 @@ describe("security issues", () => {
     // The result should NOT have __proto__ copied as an own property
     // that could pollute the prototype chain
     expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(
-      false
+      false,
     );
 
     // Verify a fresh object is not polluted
@@ -1532,7 +1532,7 @@ describe("security issues", () => {
 
     // constructor should not be an own property on the result
     expect(Object.prototype.hasOwnProperty.call(result, "constructor")).toBe(
-      false
+      false,
     );
   });
 
@@ -1544,7 +1544,7 @@ describe("security issues", () => {
 
     // prototype should not be an own property on the result
     expect(Object.prototype.hasOwnProperty.call(result, "prototype")).toBe(
-      false
+      false,
     );
   });
 });
@@ -1675,18 +1675,18 @@ describe("robustness issues", () => {
   test("literal type mismatch in union scoring penalizes wrong type", () => {
     const StringKind = object(
       { kind: literal("str"), value: string() },
-      "StringKind"
+      "StringKind",
     );
     const NumberKind = object(
       { kind: literal(42), value: number() },
-      "NumberKind"
+      "NumberKind",
     );
     const schema = union(StringKind, NumberKind);
 
     // Passing string to number literal should be penalized
     const result = parseWithDiagnostics(schema, { kind: "hello", value: 123 });
     expect(getUnionSelection(result.diagnostics)?.chosenName).toBe(
-      "StringKind"
+      "StringKind",
     );
   });
 
@@ -1694,7 +1694,7 @@ describe("robustness issues", () => {
     const WithBool = object({ active: boolean(), name: string() }, "WithBool");
     const WithString = object(
       { active: string(), name: string() },
-      "WithString"
+      "WithString",
     );
     const schema = union(WithBool, WithString);
 
@@ -1728,7 +1728,7 @@ describe("robustness issues", () => {
         nested1: object({ x: string(), y: string(), z: string() }),
         nested2: object({ x: string(), y: string(), z: string() }),
       },
-      "LotsOfFields"
+      "LotsOfFields",
     );
 
     const ExactMatch = object(
@@ -1736,7 +1736,7 @@ describe("robustness issues", () => {
         kind: literal("exact"),
         value: string(),
       },
-      "ExactMatch"
+      "ExactMatch",
     );
 
     const schema = union(LotsOfFields, ExactMatch);
@@ -1770,7 +1770,7 @@ describe("robustness issues", () => {
 
     const result = parseWithDiagnostics(schema, input);
     expect(getUnionSelection(result.diagnostics)?.chosenName).toBe(
-      "ExactMatch"
+      "ExactMatch",
     );
   });
 });
@@ -1827,7 +1827,7 @@ describe("readme examples", () => {
           id: string(),
           createdAt: string(),
           status: literal("active"),
-        })
+        }),
       ),
       cursor: optional(string()),
     });
@@ -1901,7 +1901,7 @@ describe("readme examples", () => {
       // Diagnostics indicate missing fields
       const defaultDiags = diagnostics.filter((d) => d.kind === "default");
       const literalDefaultDiags = diagnostics.filter(
-        (d) => d.kind === "literal_default"
+        (d) => d.kind === "literal_default",
       );
       expect(defaultDiags).toHaveLength(1);
       expect(literalDefaultDiags).toHaveLength(1);
@@ -1938,7 +1938,7 @@ describe("readme examples", () => {
       const coercions = diagnostics.filter((d) => d.kind === "coercion");
       const defaults = diagnostics.filter((d) => d.kind === "default");
       const literalDefaults = diagnostics.filter(
-        (d) => d.kind === "literal_default"
+        (d) => d.kind === "literal_default",
       );
 
       expect(coercions).toHaveLength(2);
@@ -1976,11 +1976,11 @@ describe("readme examples", () => {
           type: literal("user.created"),
           user: object({ id: string(), email: string() }),
         },
-        "UserCreated"
+        "UserCreated",
       ),
       object(
         { type: literal("user.deleted"), userId: string() },
-        "UserDeleted"
+        "UserDeleted",
       ),
       object(
         {
@@ -1988,8 +1988,8 @@ describe("readme examples", () => {
           invoiceId: string(),
           amount: number(),
         },
-        "InvoicePaid"
-      )
+        "InvoicePaid",
+      ),
     );
 
     test("known type exact match routes to UserDeleted", () => {
@@ -2046,7 +2046,7 @@ describe("readme examples", () => {
     const Status = union(
       literal("pending"),
       literal("active"),
-      literal("archived")
+      literal("archived"),
     );
 
     test("exact match for known value", () => {
@@ -2177,7 +2177,7 @@ describe("readme examples", () => {
   describe("inspecting discrimination", () => {
     const Event = union(
       object({ type: literal("click"), x: number(), y: number() }, "Click"),
-      object({ type: literal("scroll"), delta: number() }, "Scroll")
+      object({ type: literal("scroll"), delta: number() }, "Scroll"),
     );
 
     test("diagnostics contains chosenIndex", () => {
@@ -2225,7 +2225,7 @@ describe("readme examples", () => {
           last_name: "Smith",
           created_at: "2024-01-01",
           is_active: true,
-        })
+        }),
       ).toEqual({
         firstName: "Alice",
         lastName: "Smith",
@@ -2255,11 +2255,11 @@ describe("readme examples", () => {
         object({
           paymentType: field(literal("bank"), { from: "payment_type" }),
           accountNumber: field(string(), { from: "account_number" }),
-        })
+        }),
       );
 
       expect(
-        parse(Payment, { payment_type: "card", last_four: "4242" })
+        parse(Payment, { payment_type: "card", last_four: "4242" }),
       ).toEqual({
         paymentType: "card",
         lastFour: "4242",
@@ -2277,7 +2277,7 @@ describe("readme examples", () => {
           object({
             theme: literal("light"),
             notifications: boolean(),
-          })
+          }),
         ),
       });
       const result = parse(User, { id: 1, name: "test", tags: ["a"] });
@@ -2294,7 +2294,7 @@ describe("readme examples", () => {
           object({
             theme: literal("light"),
             notifications: boolean(),
-          })
+          }),
         ),
       });
       const result = parse(User, {
@@ -2392,7 +2392,7 @@ describe("readme examples", () => {
 
     test("accepts array for unknown field", () => {
       expect(
-        parse(Metadata, { id: "1", data: [1, "two", { three: 3 }] })
+        parse(Metadata, { id: "1", data: [1, "two", { three: 3 }] }),
       ).toEqual({
         id: "1",
         data: [1, "two", { three: 3 }],
@@ -2695,7 +2695,7 @@ describe("field schema - nested objects", () => {
           email: string(),
           phone: string(),
         }),
-        { from: "contact_info" }
+        { from: "contact_info" },
       ),
     });
     const result = parse(User, {
@@ -2719,7 +2719,7 @@ describe("field schema - arrays", () => {
       object({
         firstName: field(string(), { from: "first_name" }),
         lastName: field(string(), { from: "last_name" }),
-      })
+      }),
     );
     const result = parse(UserList, [
       { first_name: "Alice", last_name: "Smith" },
@@ -2749,9 +2749,9 @@ describe("field schema - arrays", () => {
         array(
           object({
             userId: field(number(), { from: "user_id" }),
-          })
+          }),
         ),
-        { from: "user_list" }
+        { from: "user_list" },
       ),
     });
     const result = parse(Response, {
@@ -2770,14 +2770,14 @@ describe("field schema - union discrimination", () => {
         paymentType: field(literal("card"), { from: "payment_type" }),
         lastFour: field(string(), { from: "last_four" }),
       },
-      "Card"
+      "Card",
     );
     const Bank = object(
       {
         paymentType: field(literal("bank"), { from: "payment_type" }),
         accountNumber: field(string(), { from: "account_number" }),
       },
-      "Bank"
+      "Bank",
     );
     const Payment = union(Card, Bank);
 
@@ -2808,14 +2808,14 @@ describe("field schema - union discrimination", () => {
         kind: literal("a"),
         valueA: field(string(), { from: "value_a" }),
       },
-      "TypeA"
+      "TypeA",
     );
     const TypeB = object(
       {
         kind: literal("b"),
         valueB: string(),
       },
-      "TypeB"
+      "TypeB",
     );
     const Schema = union(TypeA, TypeB);
 
@@ -3300,7 +3300,7 @@ describe("behavioral invariants", () => {
             notes: optional(string()),
           }),
         },
-        "A"
+        "A",
       ),
       object(
         {
@@ -3308,9 +3308,9 @@ describe("behavioral invariants", () => {
           names: array(string()),
           meta: optional(unknown()),
         },
-        "B"
+        "B",
       ),
-      string()
+      string(),
     );
 
     const raw = {
@@ -3340,7 +3340,7 @@ describe("behavioral invariants", () => {
   test("union selection diagnostic is always first", () => {
     const U = union(
       object({ id: number() }, "Obj"),
-      object({ name: string() }, "Named")
+      object({ name: string() }, "Named"),
     );
     const out = parseWithDiagnostics(U, { id: "1" });
     expect(out.diagnostics[0]!.kind).toBe("union_selection");
@@ -3360,7 +3360,7 @@ describe("behavioral invariants", () => {
     expect(getUnionSelection(out1.diagnostics)?.chosenIndex).toBe(1);
     expect(getUnionSelection(out2.diagnostics)?.chosenIndex).toBe(1);
     expect(getUnionSelection(out1.diagnostics)?.reason).toBe(
-      getUnionSelection(out2.diagnostics)?.reason
+      getUnionSelection(out2.diagnostics)?.reason,
     );
     expect(out1.value).toEqual(out2.value);
   });
@@ -3408,12 +3408,12 @@ describe("behavioral invariants", () => {
 
     const canonical = parseWithDiagnostics(Schema, { value: "1" });
     expect(canonical.diagnostics.some((d) => d.kind === "field_alias")).toBe(
-      false
+      false,
     );
 
     const aliased = parseWithDiagnostics(Schema, { value_old: "1" });
     expect(aliased.diagnostics.some((d) => d.kind === "field_alias")).toBe(
-      true
+      true,
     );
   });
 
@@ -3424,7 +3424,10 @@ describe("behavioral invariants", () => {
     });
 
     expect(parse(Schema, {})).toEqual({ b: null });
-    expect(parse(Schema, { a: null, b: undefined })).toEqual({ a: null, b: null });
+    expect(parse(Schema, { a: null, b: undefined })).toEqual({
+      a: null,
+      b: null,
+    });
     expect(parse(Schema, { a: "2", b: "3" })).toEqual({ a: 2, b: 3 });
   });
 
@@ -3462,7 +3465,7 @@ describe("behavioral invariants", () => {
           active: boolean(),
           meta: optional(unknown()),
         },
-        "A"
+        "A",
       ),
       object(
         {
@@ -3470,11 +3473,11 @@ describe("behavioral invariants", () => {
           names: array(string()),
           flag: optional(boolean()),
         },
-        "B"
+        "B",
       ),
       string(),
       number(),
-      boolean()
+      boolean(),
     );
 
     let seed = 123456789;

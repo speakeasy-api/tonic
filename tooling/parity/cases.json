@@ -1,0 +1,61 @@
+{
+  "cases": [
+    {
+      "id": "string_from_number",
+      "input": 123
+    },
+    {
+      "id": "number_from_string",
+      "input": "42"
+    },
+    {
+      "id": "boolean_from_false_string",
+      "input": "false"
+    },
+    {
+      "id": "user_alias_defaults_unknown",
+      "input": {
+        "user_id": "7",
+        "name": null,
+        "role": "admin",
+        "active": true
+      }
+    },
+    {
+      "id": "array_wrap",
+      "input": {
+        "values": "single"
+      }
+    },
+    {
+      "id": "shared_alias",
+      "input": {
+        "x": "value"
+      }
+    },
+    {
+      "id": "alias_collision",
+      "input": {
+        "x": "7"
+      }
+    },
+    {
+      "id": "union_best_score",
+      "input": {
+        "kind": "z",
+        "right": "yes"
+      }
+    },
+    {
+      "id": "optional_nullable_distinction",
+      "input": {}
+    },
+    {
+      "id": "literal_discriminator_penalty",
+      "input": {
+        "kind": "a",
+        "b": "x"
+      }
+    }
+  ]
+}

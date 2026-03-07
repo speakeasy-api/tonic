@@ -1,0 +1,9 @@
+node_modules/
+dist/
+packages/tonic/dist/
+coverage/
+target/
+crates/
+Cargo.toml
+Cargo.lock
+bun.lock

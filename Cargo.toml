@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/speakeasy-api/tonic"
+
+[workspace.dependencies]
+pretty_assertions = "1.4"
+proc-macro2 = "1.0"
+quote = "1.0"
+serde_json = "1.0"
+syn = { version = "2.0", features = ["full"] }
+tonic_json_derive = { version = "0.1.1", path = "crates/tonic_json_derive" }

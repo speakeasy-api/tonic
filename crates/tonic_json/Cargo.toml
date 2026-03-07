@@ -1,0 +1,17 @@
+[package]
+name = "tonic_json"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A coercing JSON schema fitting library for forward-compatible API consumption."
+readme = "README.md"
+keywords = ["json", "schema", "coercion", "api"]
+categories = ["encoding", "parser-implementations"]
+
+[dependencies]
+serde_json.workspace = true
+tonic_json_derive.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

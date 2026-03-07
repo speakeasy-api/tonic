@@ -1,0 +1,471 @@
+<div align="center">
+  <a href="https://www.speakeasy.com/" target="_blank">
+    <img width="1500" height="500" alt="Speakeasy" src="https://github.com/user-attachments/assets/0e56055b-02a3-4476-9130-4be299e5a39c" />
+  </a>
+  <br />
+  <br />
+  <a href="https://speakeasy.com/docs/create-client-sdks/" target="_blank"><b>Docs</b></a>&nbsp;&nbsp;//&nbsp;&nbsp;<a href="https://go.speakeasy.com/slack" target="_blank"><b>Join us on Slack</b></a>
+  <br />
+  <br />
+</div>
+
+<hr />
+
+<p align="center">
+  <img src="logo.svg" alt="tonic" width="128" height="128" />
+  <h1 align="center"><b>tonic</b></h1>
+  <p align="center">
+    A coercing schema library for forward-compatible API consumption.<br />
+    <!-- Used in Speakeasy's <a href="https://www.speakeasy.com/product/sdk-generation">generated SDKs</a> to gracefully handle API response changes. -->
+  </p>
+  <p align="center">
+    <a href="https://www.npmjs.com/package/@speakeasy-api/tonic"><img alt="npm" src="https://img.shields.io/npm/v/@speakeasy-api/tonic.svg?style=for-the-badge&logo=npm"></a>
+    <a href="https://www.typescriptlang.org/"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg?style=for-the-badge&logo=typescript&logoColor=white"></a>
+    <a href="#features"><img alt="Bundle Size" src="https://img.shields.io/badge/gzip-<2.5kb-brightgreen.svg?style=for-the-badge"></a>
+    <br/>
+    <a href="#features"><img alt="Zero Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen.svg?style=for-the-badge"></a>
+    <a href="/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge"></a>
+    <br/>
+    <a href="https://speakeasy.com/"><img alt="Built by Speakeasy" src="https://www.speakeasy.com/assets/badges/built-by-speakeasy.svg" /></a>
+  </p>
+</p>
+
+```bash
+npm i @speakeasy-api/tonic
+```
+
+## Features
+
+- Under 2.5kb gzipped (enforced by CI)
+- Zero dependencies
+- Full TypeScript inference
+- Never throws
+
+## Why this exists
+
+Validation libraries like Zod are designed to **reject** invalid data. That's correct for validating user input at trust boundaries—you control the schema, users control the data, and you want to fail fast on bad input.
+
+API responses are different. You control the client code, but someone else controls the server. When consuming APIs:
+
+- Fields get added (new features ship)
+- Fields get removed (deprecations happen)
+- Types change (`"count": "5"` → `"count": 5`)
+- Enums grow new variants (`status: "pending" | "complete"` gains `"processing"`)
+- Response shapes change across versions
+
+When Zod encounters any of these, it throws. Your application crashes. Users see error screens. You scramble to deploy a client update for a change that shouldn't have broken anything.
+
+## What `tonic` does
+
+Tonic coerces input to match your schema. It always produces a valid output—no exceptions. Unknown fields pass through. Missing fields get defaults. Type mismatches get converted when possible.
+
+```typescript
+import { object, string, number, parse } from "@speakeasy-api/tonic";
+
+const User = object({
+  id: number(),
+  name: string(),
+});
+
+// All of these produce { id: 123, name: "alice" }
+parse(User, { id: 123, name: "alice" }); // exact match
+parse(User, { id: "123", name: "alice" }); // string → number
+parse(User, { id: 123, name: "alice", role: "admin" }); // extra field preserved
+parse(User, { id: 123 }); // missing string → ""
+parse(User, null); // complete miss → defaults
+```
+
+## Examples
+
+### Parsing API responses
+
+```typescript
+const ApiResponse = object({
+  data: array(
+    object({
+      id: string(),
+      createdAt: string(),
+      status: literal("active"),
+    }),
+  ),
+  cursor: optional(string()),
+});
+
+// Works even if the API adds new fields or changes status values
+const response = await fetch("/api/items").then((r) => r.json());
+const { data, cursor } = parse(ApiResponse, response);
+```
+
+### Detecting API response mismatches
+
+Use `parseWithDiagnostics` to detect when the API returns data that doesn't match your expectations. This is useful for logging warnings without breaking your app:
+
+```typescript
+const UserResponse = object({
+  id: number(),
+  name: string(),
+  email: string(),
+  role: literal("admin"),
+});
+
+const response = await fetch("/api/user/123").then((r) => r.json());
+const { value, diagnostics } = parseWithDiagnostics(UserResponse, response);
+
+// Log warnings for any mismatches
+for (const diagnostic of diagnostics) {
+  const path = diagnostic.path.join(".");
+  if (diagnostic.kind === "default") {
+    console.warn(`Missing field "${path}": using default value`);
+  } else if (diagnostic.kind === "coercion") {
+    console.warn(
+      `Type mismatch at "${path}": expected ${diagnostic.details.to}, got ${diagnostic.details.from}`,
+    );
+  }
+}
+```
+
+### Discriminated unions
+
+Events, webhooks, and polymorphic responses often use a discriminator field:
+
+```typescript
+const WebhookEvent = union(
+  object(
+    {
+      type: literal("user.created"),
+      user: object({ id: string(), email: string() }),
+    },
+    "UserCreated",
+  ),
+  object({ type: literal("user.deleted"), userId: string() }, "UserDeleted"),
+  object(
+    { type: literal("invoice.paid"), invoiceId: string(), amount: number() },
+    "InvoicePaid",
+  ),
+);
+
+// Known type, exact match → routes to UserDeleted
+parse(WebhookEvent, { type: "user.deleted", userId: "u_123" });
+// → { type: "user.deleted", userId: "u_123" }
+
+// Known type, shape changed → routes to UserCreated, fills expected fields
+// with default values
+parse(WebhookEvent, { type: "user.created", userId: "u_123" });
+// → { type: "user.created", userId: "u_123", user: { id: "", email: "" } }
+
+// Known type, but payload has extra fields the schema doesn't know about
+// (API added a "reason" field) → still routes correctly, extra data preserved
+parse(WebhookEvent, { type: "user.deleted", userId: "u_123", reason: "spam" });
+// → { type: "user.deleted", userId: "u_123", reason: "spam" }
+
+// Unknown type → doesn't crash, coerces to closest structural match
+// "user.updated" isn't in schema, but has a "user" field like UserCreated
+parse(WebhookEvent, {
+  type: "user.updated",
+  user: { id: "u_123", email: "new@example.com" },
+});
+// → { type: "user.updated", user: { id: "u_123", email: "new@example.com" } }
+```
+
+### Open enums
+
+APIs add enum values over time. A strict enum breaks when the server returns a value the client doesn't know about:
+
+```typescript
+// This is actually a union of literals, allowing any string
+const Status = union(
+  literal("pending"),
+  literal("active"),
+  literal("archived"),
+);
+
+parse(Status, "pending"); // "pending" (exact match)
+parse(Status, "suspended"); // "suspended" (unknown value preserved)
+
+const Item = object({
+  id: string(),
+  status: Status,
+});
+
+// Unknown enum values pass through without crashing
+parse(Item, { id: "123", status: "on_hold" });
+// → { id: "123", status: "on_hold" }
+```
+
+### Handling missing data
+
+When a field is missing, you get the schema's default:
+
+```typescript
+const Config = object({
+  timeout: number(), // default: 0
+  retries: number(), // default: 0
+  debug: boolean(), // default: false
+  endpoint: string(), // default: ""
+});
+
+parse(Config, {});
+// → { timeout: 0, retries: 0, debug: false, endpoint: "" }
+
+parse(Config, { timeout: 30 });
+// → { timeout: 30, retries: 0, debug: false, endpoint: "" }
+```
+
+### `optional` vs `nullable`
+
+```typescript
+const Profile = object({
+  name: string(),
+  bio: optional(string()), // omitted from output when undefined
+  avatar: nullable(string()), // null when missing
+});
+
+parse(Profile, { name: "alice" });
+// → { name: "alice", avatar: null }
+// Note: bio is not present in output
+
+parse(Profile, { name: "alice", bio: undefined, avatar: undefined });
+// → { name: "alice", avatar: null }
+```
+
+### Array coercion
+
+Non-arrays become single-element arrays:
+
+```typescript
+const Tags = array(string());
+
+parse(Tags, ["a", "b"]); // ["a", "b"]
+parse(Tags, "single"); // ["single"]
+parse(Tags, null); // []
+```
+
+### Field renaming
+
+The `field` wrapper lets your schema diverge from the input shape. Map input keys to different output keys. This is uuseful for naming convention differences, legacy field names, or reshaping third-party API responses to match your domain model:
+
+```typescript
+const User = object({
+  firstName: field(string(), { from: "first_name" }),
+  lastName: field(string(), { from: "last_name" }),
+  createdAt: field(string(), { from: "created_at" }),
+  isActive: field(boolean(), { from: "is_active" }),
+});
+
+parse(User, {
+  first_name: "Alice",
+  last_name: "Smith",
+  created_at: "2024-01-01",
+  is_active: true,
+});
+// → { firstName: "Alice", lastName: "Smith", createdAt: "2024-01-01", isActive: true }
+```
+
+Works with all schema types including `optional` and `nullable`:
+
+```typescript
+const Profile = object({
+  displayName: field(string(), { from: "display_name" }),
+  avatarUrl: field(optional(string()), { from: "avatar_url" }),
+  bio: field(nullable(string()), { from: "bio_text" }),
+});
+
+parse(Profile, { display_name: "alice" });
+// → { displayName: "alice", bio: null }
+// Note: avatarUrl is omitted (optional + missing)
+```
+
+Aliased fields work with union discrimination:
+
+```typescript
+const Payment = union(
+  object({
+    paymentType: field(literal("card"), { from: "payment_type" }),
+    lastFour: field(string(), { from: "last_four" }),
+  }),
+  object({
+    paymentType: field(literal("bank"), { from: "payment_type" }),
+    accountNumber: field(string(), { from: "account_number" }),
+  }),
+);
+
+parse(Payment, { payment_type: "card", last_four: "4242" });
+// → { paymentType: "card", lastFour: "4242" }
+```
+
+### Type inference
+
+```typescript
+const User = object({
+  id: number(),
+  name: string(),
+  tags: array(string()),
+  settings: optional(
+    object({
+      theme: literal("light"),
+      notifications: boolean(),
+    }),
+  ),
+});
+
+type User = Infer<typeof User>;
+// {
+//   id: number;
+//   name: string;
+//   tags: string[];
+//   settings?: { theme: "light" | string; notifications: boolean };
+// }
+```
+
+### Cyclic / recursive types
+
+For self-referential schemas (like a `User` with a `manager` field that is also a `User`), use `typed<T>()` with getter syntax to break the circular inference:
+
+```typescript
+import { object, string, Infer } from "@speakeasy-api/tonic";
+
+const UserSchema = object({
+  id: string(),
+  name: string(),
+  get manager() {
+    return UserSchema;
+  },
+});
+
+parse(UserSchema, {
+  id: "1",
+  name: "Alice",
+  manager: { id: "2", name: "Bob" },
+});
+// → { id: "1", name: "Alice", manager: { id: "2", name: "Bob" } }
+
+type User = Infer<UserSchema>;
+```
+
+> [!NOTE]
+> Using a getter to define a field's type automatically makes it `optional`. This protects against infinite default value loops.
+
+### Accepting any value
+
+Use `unknown()` when you need to accept dynamic or untyped data:
+
+```typescript
+const Metadata = object({
+  id: string(),
+  data: unknown(), // accepts any value
+});
+
+parse(Metadata, { id: "123", data: { anything: "goes", nested: [1, 2, 3] } });
+// → { id: "123", data: { anything: "goes", nested: [1, 2, 3] } }
+```
+
+## API
+
+### Primitives
+
+```typescript
+string(); // default: ""
+number(); // default: 0
+boolean(); // default: false
+literal(v); // default: v (accepts any value of same base type)
+```
+
+### Composites
+
+```typescript
+object({ key: schema }); // preserves extra keys
+array(schema); // coerces non-arrays to single-element
+optional(schema); // omits key when undefined
+nullable(schema); // converts undefined to null
+field(schema, { from: "key" }); // reads from aliased input key
+```
+
+### Unions
+
+```typescript
+union(schemaA, schemaB, ...)  // scored discrimination
+```
+
+### Utilities
+
+```typescript
+unknown(); // accepts any value, returns as-is
+typed<T>(schema); // explicitly type a schema for circular references
+```
+
+### Parsing
+
+```typescript
+parse(schema, value); // returns coerced value
+parseWithDiagnostics(schema, value); // returns { value, diagnostics }
+```
+
+## Union discrimination logic
+
+When parsing a union, Tonic scores each candidate and picks the best match.
+
+Scores are additive. Highest total wins.
+
+| Condition                                        | Score       |
+| ------------------------------------------------ | ----------- |
+| Exact literal match                              | +200        |
+| Nullable schema + `null` value                   | +150        |
+| Type match (`string`/`number`/`boolean`/`array`) | +80 to +100 |
+| Discriminator field matches exactly              | +50         |
+| Required property present                        | +5          |
+| Property value matches expected type             | +2          |
+| Input key exists in schema                       | +1          |
+| Required property missing                        | -10         |
+| Discriminator field has wrong type               | -50         |
+
+Discrimination works recursively on nested objects:
+
+```typescript
+const A = object({ inner: object({ foo: string() }) }, "A");
+const B = object({ inner: object({ bar: string() }) }, "B");
+const Schema = union(A, B);
+
+parse(Schema, { inner: { bar: "hello" } });
+// Selects B because nested "bar" matches B's structure
+```
+
+### Inspecting discrimination
+
+```typescript
+const { value, diagnostics } = parseWithDiagnostics(Event, input);
+
+// Find the union_selection diagnostic
+const selection = diagnostics.find((d) => d.kind === "union_selection");
+if (selection) {
+  selection.details.chosenIndex; // index of winning schema
+  selection.details.chosenName; // name if object schema had one
+  selection.details.reason; // "exact match" | "type match" | "best score"
+}
+```
+
+## Design principles
+
+**Never throw.** Parse functions return values. Malformed input produces degraded but usable output. Your app keeps running.
+
+**Preserve unknown data.** Extra object keys pass through unchanged. Newer API responses work with older client schemas.
+
+**Coerce at the boundary.** Type conversion happens during parsing. After parsing, your code works with correctly-typed data.
+
+**Defaults over nulls.** Missing primitives become zero values (`""`, `0`, `false`), not `null`. Use `nullable()` or `optional()` explicitly when you want those semantics.
+
+**Stay small.** The entire library is under 2.5kb gzipped. SDKs ship this to end users, so size matters.
+
+## When to Use What
+
+| Scenario                                    | Tool  |
+| ------------------------------------------- | ----- |
+| Validating user form input                  | Zod   |
+| Validating webhook payloads you define      | Zod   |
+| Consuming external APIs                     | Tonic |
+| Consuming your own APIs across version skew | Tonic |
+| Config files that must be strictly correct  | Zod   |
+| Config files that should degrade gracefully | Tonic |
+
+## License
+
+MIT
