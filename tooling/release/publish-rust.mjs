@@ -19,29 +19,101 @@ if (typeof version !== "string" || version.length === 0) {
 
 function run(args) {
   const result = spawnSync("cargo", args, {
-    stdio: "inherit",
+    encoding: "utf8",
   });
+
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
 
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
 }
 
-function crateVersionIsVisible(crate) {
-  const result = spawnSync("cargo", ["search", crate, "--limit", "1"], {
-    encoding: "utf8",
-  });
+async function crateVersionIsVisible(crate) {
+  try {
+    const response = await fetch(`https://crates.io/api/v1/crates/${crate}`, {
+      headers: {
+        "user-agent": "tonic-release-script",
+      },
+    });
 
-  return (
-    result.status === 0 && result.stdout.includes(`${crate} = "${version}"`)
+    if (response.status === 404) {
+      return false;
+    }
+
+    if (!response.ok) {
+      process.stdout.write(
+        `warning: crates.io returned ${response.status} while checking ${crate} ${version}\n`,
+      );
+      return false;
+    }
+
+    const payload = await response.json();
+    const publishedVersions = Array.isArray(payload.versions)
+      ? payload.versions
+      : [];
+
+    return publishedVersions.some(
+      (publishedVersion) => publishedVersion.num === version,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stdout.write(
+      `warning: failed to check crates.io for ${crate} ${version}: ${message}\n`,
+    );
+    return false;
+  }
+}
+
+async function publishCrate(crate) {
+  if (await crateVersionIsVisible(crate)) {
+    process.stdout.write(
+      `${crate} ${version} is already published on crates.io, skipping\n`,
+    );
+    return false;
+  }
+
+  const result = spawnSync(
+    "cargo",
+    ["publish", "-p", crate, "--locked", "--allow-dirty"],
+    {
+      encoding: "utf8",
+    },
   );
+
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+
+  if (result.status === 0) {
+    return true;
+  }
+
+  if (await crateVersionIsVisible(crate)) {
+    process.stdout.write(
+      `${crate} ${version} is already visible on crates.io after a failed publish attempt, continuing\n`,
+    );
+    return false;
+  }
+
+  process.exit(result.status ?? 1);
 }
 
 async function waitForPublishedVersion(crate) {
-  const attempts = 24;
+  const attempts = 60;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    if (crateVersionIsVisible(crate)) {
+    if (await crateVersionIsVisible(crate)) {
       return;
     }
 
@@ -64,6 +136,10 @@ if (dryRun) {
   process.exit(0);
 }
 
-run(["publish", "-p", "tonic_json_derive", "--locked", "--allow-dirty"]);
-await waitForPublishedVersion("tonic_json_derive");
-run(["publish", "-p", "tonic_json", "--locked", "--allow-dirty"]);
+const deriveWasPublished = await publishCrate("tonic_json_derive");
+
+if (deriveWasPublished) {
+  await waitForPublishedVersion("tonic_json_derive");
+}
+
+await publishCrate("tonic_json");
