@@ -81,4 +81,4 @@ bun run release:rust
 bun run release:all:dry-run
 ```
 
-CI keeps the Rust workspace version aligned with the TypeScript package version before publishing.
+CI computes one release version from the latest tag and commit bump type, then applies it with `npm version` and `cargo set-version --workspace` before publishing.

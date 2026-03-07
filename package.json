@@ -26,8 +26,7 @@
     "release:rust": "bun tooling/release/publish-rust.mjs",
     "release:rust:dry-run": "bun tooling/release/publish-rust.mjs --dry-run",
     "release:all": "bun run release:rust && bun run release:ts",
-    "release:all:dry-run": "bun run release:rust:dry-run && bun run release:ts:dry-run",
-    "version:sync:rust": "bun tooling/release/sync-rust-version.mjs"
+    "release:all:dry-run": "bun run release:rust:dry-run && bun run release:ts:dry-run"
   },
   "devDependencies": {
     "prettier": "^3"
